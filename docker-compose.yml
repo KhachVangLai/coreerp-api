@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: coreerp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coreerp
+      POSTGRES_USER: coreerp
+      POSTGRES_PASSWORD: coreerp
+    ports:
+      - "5432:5432"
+    volumes:
+      - coreerp_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coreerp -d coreerp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  coreerp_postgres_data:

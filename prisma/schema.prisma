@@ -1,0 +1,498 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================
+// Enums
+// =====================
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum UserRole {
+  TENANT_ADMIN
+  SALES
+  WAREHOUSE
+  FINANCE
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CustomerType {
+  B2C
+  B2B
+}
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  ADJUST
+  RESERVE
+  RELEASE
+}
+
+enum StockReservationStatus {
+  RESERVED
+  RELEASED
+  COMMITTED
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  FULFILLED
+  COMPLETED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  MOMO
+  OTHER
+}
+
+// =====================
+// Identity / Tenant
+// =====================
+
+model Tenant {
+  id        String       @id @default(uuid()) @db.Uuid
+  code      String       @unique
+  name      String
+  status    TenantStatus @default(ACTIVE)
+
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  users             User[]
+  customers         Customer[]
+  products          Product[]
+  warehouses        Warehouse[]
+  stockItems        StockItem[]
+  stockMovements    StockMovement[]
+  stockReservations StockReservation[]
+  salesOrders       SalesOrder[]
+  salesOrderLines   SalesOrderLine[]
+  invoices          Invoice[]
+  invoiceLines      InvoiceLine[]
+  payments          Payment[]
+  auditLogs         AuditLog[]
+
+  @@map("tenants")
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  tenantId     String     @map("tenant_id") @db.Uuid
+
+  email        String
+  passwordHash String     @map("password_hash")
+  fullName     String     @map("full_name")
+  role         UserRole
+  status       UserStatus @default(ACTIVE)
+
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  createdSalesOrders   SalesOrder[] @relation("SalesOrderCreatedBy")
+  confirmedSalesOrders SalesOrder[] @relation("SalesOrderConfirmedBy")
+  fulfilledSalesOrders SalesOrder[] @relation("SalesOrderFulfilledBy")
+  completedSalesOrders SalesOrder[] @relation("SalesOrderCompletedBy")
+  cancelledSalesOrders SalesOrder[] @relation("SalesOrderCancelledBy")
+
+  createdStockMovements StockMovement[] @relation("StockMovementCreatedBy")
+  createdPayments       Payment[]       @relation("PaymentCreatedBy")
+  auditLogs             AuditLog[]      @relation("AuditLogActor")
+
+  @@unique([tenantId, email])
+  @@index([tenantId, role])
+  @@index([tenantId, status])
+  @@map("users")
+}
+
+// =====================
+// Master Data
+// =====================
+
+model Customer {
+  id       String       @id @default(uuid()) @db.Uuid
+  tenantId String       @map("tenant_id") @db.Uuid
+
+  code     String
+  name     String
+  phone    String?
+  email    String?
+  taxCode  String?      @map("tax_code")
+  type     CustomerType @default(B2C)
+  status   RecordStatus @default(ACTIVE)
+
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  salesOrders SalesOrder[]
+  invoices    Invoice[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, name])
+  @@index([tenantId, phone])
+  @@index([tenantId, status])
+  @@map("customers")
+}
+
+model Product {
+  id       String       @id @default(uuid()) @db.Uuid
+  tenantId String       @map("tenant_id") @db.Uuid
+
+  sku       String
+  name      String
+  unit      String
+  basePrice Decimal      @map("base_price") @db.Decimal(12, 2)
+  status    RecordStatus @default(ACTIVE)
+
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  stockItems        StockItem[]
+  stockMovements    StockMovement[]
+  stockReservations StockReservation[]
+  salesOrderLines   SalesOrderLine[]
+  invoiceLines      InvoiceLine[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, name])
+  @@index([tenantId, status])
+  @@map("products")
+}
+
+model Warehouse {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @map("tenant_id") @db.Uuid
+
+  code     String
+  name     String
+  address  String?
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  stockItems        StockItem[]
+  stockMovements    StockMovement[]
+  stockReservations StockReservation[]
+  salesOrders       SalesOrder[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, isActive])
+  @@map("warehouses")
+}
+
+// =====================
+// Inventory
+// =====================
+
+model StockItem {
+  id          String @id @default(uuid()) @db.Uuid
+  tenantId    String @map("tenant_id") @db.Uuid
+  warehouseId String @map("warehouse_id") @db.Uuid
+  productId   String @map("product_id") @db.Uuid
+
+  quantityOnHand   Int @default(0) @map("quantity_on_hand")
+  quantityReserved Int @default(0) @map("quantity_reserved")
+  version          Int @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, warehouseId, productId])
+  @@index([tenantId, productId])
+  @@index([tenantId, warehouseId])
+  @@map("stock_items")
+}
+
+model StockMovement {
+  id          String            @id @default(uuid()) @db.Uuid
+  tenantId    String            @map("tenant_id") @db.Uuid
+  warehouseId String            @map("warehouse_id") @db.Uuid
+  productId   String            @map("product_id") @db.Uuid
+
+  type     StockMovementType
+  quantity Int
+
+  beforeOnHand   Int @map("before_on_hand")
+  afterOnHand    Int @map("after_on_hand")
+  beforeReserved Int @map("before_reserved")
+  afterReserved  Int @map("after_reserved")
+
+  referenceType String? @map("reference_type")
+  referenceId   String? @map("reference_id")
+
+  note        String?
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  createdBy User? @relation("StockMovementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, warehouseId, productId])
+  @@index([tenantId, type])
+  @@index([tenantId, referenceType, referenceId])
+  @@index([tenantId, createdAt])
+  @@map("stock_movements")
+}
+
+model StockReservation {
+  id               String                 @id @default(uuid()) @db.Uuid
+  tenantId         String                 @map("tenant_id") @db.Uuid
+  salesOrderId     String                 @map("sales_order_id") @db.Uuid
+  salesOrderLineId String                 @unique @map("sales_order_line_id") @db.Uuid
+  warehouseId      String                 @map("warehouse_id") @db.Uuid
+  productId        String                 @map("product_id") @db.Uuid
+
+  quantity Int
+  status   StockReservationStatus @default(RESERVED)
+
+  reservedAt  DateTime  @default(now()) @map("reserved_at")
+  releasedAt  DateTime? @map("released_at")
+  committedAt DateTime? @map("committed_at")
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  salesOrder     SalesOrder     @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  salesOrderLine SalesOrderLine @relation(fields: [salesOrderLineId], references: [id], onDelete: Restrict)
+  warehouse      Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  product        Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, salesOrderLineId])
+  @@index([tenantId, salesOrderId])
+  @@index([tenantId, warehouseId, productId])
+  @@index([tenantId, status])
+  @@map("stock_reservations")
+}
+
+// =====================
+// Sales
+// =====================
+
+model SalesOrder {
+  id          String           @id @default(uuid()) @db.Uuid
+  tenantId    String           @map("tenant_id") @db.Uuid
+  orderCode   String           @map("order_code")
+  customerId  String           @map("customer_id") @db.Uuid
+  warehouseId String           @map("warehouse_id") @db.Uuid
+
+  status SalesOrderStatus @default(DRAFT)
+
+  subtotalAmount Decimal @default(0) @map("subtotal_amount") @db.Decimal(12, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  totalAmount    Decimal @default(0) @map("total_amount") @db.Decimal(12, 2)
+
+  note String?
+
+  createdById   String  @map("created_by_id") @db.Uuid
+  confirmedById String? @map("confirmed_by_id") @db.Uuid
+  fulfilledById String? @map("fulfilled_by_id") @db.Uuid
+  completedById String? @map("completed_by_id") @db.Uuid
+  cancelledById String? @map("cancelled_by_id") @db.Uuid
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  confirmedAt DateTime? @map("confirmed_at")
+  fulfilledAt DateTime? @map("fulfilled_at")
+  completedAt DateTime? @map("completed_at")
+  cancelledAt DateTime? @map("cancelled_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  customer  Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+
+  createdBy   User  @relation("SalesOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  confirmedBy User? @relation("SalesOrderConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  fulfilledBy User? @relation("SalesOrderFulfilledBy", fields: [fulfilledById], references: [id], onDelete: SetNull)
+  completedBy User? @relation("SalesOrderCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  cancelledBy User? @relation("SalesOrderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+
+  lines        SalesOrderLine[]
+  reservations StockReservation[]
+  invoice      Invoice?
+
+  @@unique([tenantId, orderCode])
+  @@index([tenantId, customerId])
+  @@index([tenantId, warehouseId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@map("sales_orders")
+}
+
+model SalesOrderLine {
+  id           String @id @default(uuid()) @db.Uuid
+  tenantId     String @map("tenant_id") @db.Uuid
+  salesOrderId String @map("sales_order_id") @db.Uuid
+  productId    String @map("product_id") @db.Uuid
+
+  skuSnapshot         String @map("sku_snapshot")
+  productNameSnapshot String @map("product_name_snapshot")
+  unitSnapshot        String @map("unit_snapshot")
+
+  quantity  Int
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineTotal Decimal @map("line_total") @db.Decimal(12, 2)
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  reservation StockReservation?
+
+  @@index([tenantId, salesOrderId])
+  @@index([tenantId, productId])
+  @@map("sales_order_lines")
+}
+
+// =====================
+// Finance
+// =====================
+
+model Invoice {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  invoiceCode  String        @map("invoice_code")
+  salesOrderId String        @unique @map("sales_order_id") @db.Uuid
+  customerId   String        @map("customer_id") @db.Uuid
+
+  status InvoiceStatus @default(DRAFT)
+
+  subtotalAmount Decimal @default(0) @map("subtotal_amount") @db.Decimal(12, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  totalAmount    Decimal @default(0) @map("total_amount") @db.Decimal(12, 2)
+  paidAmount     Decimal @default(0) @map("paid_amount") @db.Decimal(12, 2)
+
+  issuedAt DateTime? @map("issued_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  customer   Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  lines    InvoiceLine[]
+  payments Payment[]
+
+  @@unique([tenantId, invoiceCode])
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id        String  @id @default(uuid()) @db.Uuid
+  tenantId  String  @map("tenant_id") @db.Uuid
+  invoiceId String  @map("invoice_id") @db.Uuid
+  productId String? @map("product_id") @db.Uuid
+
+  skuSnapshot         String @map("sku_snapshot")
+  productNameSnapshot String @map("product_name_snapshot")
+  unitSnapshot        String @map("unit_snapshot")
+
+  quantity  Int
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+  lineTotal Decimal @map("line_total") @db.Decimal(12, 2)
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  invoice Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, productId])
+  @@map("invoice_lines")
+}
+
+model Payment {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @map("tenant_id") @db.Uuid
+  invoiceId String        @map("invoice_id") @db.Uuid
+
+  amount      Decimal       @db.Decimal(12, 2)
+  method      PaymentMethod
+  referenceNo String?       @map("reference_no")
+  paidAt      DateTime      @map("paid_at")
+
+  createdById String   @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  createdBy User    @relation("PaymentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, invoiceId])
+  @@index([tenantId, paidAt])
+  @@map("payments")
+}
+
+// =====================
+// Audit
+// =====================
+
+model AuditLog {
+  id       String @id @default(uuid()) @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  actorUserId String? @map("actor_user_id") @db.Uuid
+
+  action     String
+  entityType String  @map("entity_type")
+  entityId   String  @map("entity_id")
+  metadata   Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  actor  User?  @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, actorUserId])
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
+}

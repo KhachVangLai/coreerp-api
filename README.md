@@ -54,12 +54,56 @@ CoreERP is built as a modular monolith. The MVP will focus on the Order-to-Cash 
    GET http://localhost:3000/api/v1/health
    ```
 
+## Database Setup
+
+Start PostgreSQL with Docker Compose:
+
+```bash
+docker compose up -d
+```
+
+Create a local environment file:
+
+```bash
+cp .env.example .env
+```
+
+Validate the Prisma schema:
+
+```bash
+npm run prisma:validate
+```
+
+Run database migrations:
+
+```bash
+npm run prisma:migrate
+```
+
+For future schema changes, pass a migration name, for example `npm run prisma:migrate -- --name add_next_feature`.
+
+Generate Prisma Client:
+
+```bash
+npm run prisma:generate
+```
+
+Open Prisma Studio:
+
+```bash
+npm run prisma:studio
+```
+
 ## Available Scripts
 
 - `npm run start:dev` - start NestJS in watch mode
 - `npm run build` - compile the application
 - `npm run lint` - run ESLint with fixes
 - `npm test` - run Jest tests
+- `npm run prisma:validate` - validate `prisma/schema.prisma`
+- `npm run prisma:migrate` - create/apply a local Prisma migration
+- `npm run prisma:generate` - generate Prisma Client
+- `npm run prisma:studio` - open Prisma Studio
 
 ## Current Scope
 
