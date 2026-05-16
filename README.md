@@ -94,6 +94,29 @@ Open Prisma Studio:
 npm run prisma:studio
 ```
 
+Seed local demo tenants and users:
+
+```bash
+npm run db:seed
+```
+
+## Demo Accounts
+
+All demo accounts use password `123456`. These accounts are for local development only.
+
+| tenantCode | email | role |
+|---|---|---|
+| minh-anh-retail | admin@minhanh.vn | TENANT_ADMIN |
+| minh-anh-retail | sales@minhanh.vn | SALES |
+| minh-anh-retail | warehouse@minhanh.vn | WAREHOUSE |
+| minh-anh-retail | finance@minhanh.vn | FINANCE |
+| minh-anh-retail | viewer@minhanh.vn | VIEWER |
+| hoang-long-fashion | admin@hoanglong.vn | TENANT_ADMIN |
+| hoang-long-fashion | sales@hoanglong.vn | SALES |
+| hoang-long-fashion | warehouse@hoanglong.vn | WAREHOUSE |
+| hoang-long-fashion | finance@hoanglong.vn | FINANCE |
+| hoang-long-fashion | viewer@hoanglong.vn | VIEWER |
+
 ## Available Scripts
 
 - `npm run start:dev` - start NestJS in watch mode
@@ -104,6 +127,7 @@ npm run prisma:studio
 - `npm run prisma:migrate` - create/apply a local Prisma migration
 - `npm run prisma:generate` - generate Prisma Client
 - `npm run prisma:studio` - open Prisma Studio
+- `npm run db:seed` - seed local demo tenants and users
 
 ## Current Scope
 
