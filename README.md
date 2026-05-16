@@ -73,3 +73,10 @@ This repository currently contains only the NestJS foundation:
 - Health endpoint at `/api/v1/health`
 
 Auth, Prisma migrations, inventory, sales orders, invoices, payments, and other business modules are intentionally not implemented yet.
+
+## Project Documentation
+
+- [Requirement & Planning v3](docs/requirement-planning-v3.md)
+- [API Contract v1](docs/api-contract-v1.md)
+- [Codex Implementation Backlog v1](docs/codex-backlog-v1.md)
+- [Prisma Schema Notes v1](docs/prisma-schema-notes-v1.md)
