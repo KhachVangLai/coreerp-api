@@ -117,6 +117,8 @@ All demo accounts use password `123456`. These accounts are for local developmen
 | hoang-long-fashion | finance@hoanglong.vn | FINANCE |
 | hoang-long-fashion | viewer@hoanglong.vn | VIEWER |
 
+Login with `POST /api/v1/auth/login`, then call `GET /api/v1/me` with `Authorization: Bearer <accessToken>`.
+
 ## Available Scripts
 
 - `npm run start:dev` - start NestJS in watch mode

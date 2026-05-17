@@ -33,7 +33,7 @@ async function bootstrap(): Promise<void> {
         type: 'http',
         scheme: 'bearer',
         bearerFormat: 'JWT',
-        description: 'Enter a JWT access token. Auth is not implemented yet.',
+        description: 'Enter a JWT access token.',
       },
       'bearer',
     )
