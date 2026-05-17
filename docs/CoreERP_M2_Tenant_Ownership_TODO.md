@@ -6,6 +6,7 @@ Every tenant-scoped query must include `currentUser.tenantId` from authenticated
 
 Examples:
 
+- Query tenant-scoped records with `{ id: customerId, tenantId: currentUser.tenantId }`, not only `{ id: customerId }`.
 - A `SalesOrder` must only reference a `Customer` and `Warehouse` owned by the authenticated tenant.
 - A `SalesOrderLine` must only reference a `Product` owned by the authenticated tenant.
 - A `StockReservation` must only reference order lines, warehouses, and products owned by the same tenant.

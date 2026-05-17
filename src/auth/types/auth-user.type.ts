@@ -4,10 +4,20 @@ export type JwtPayload = {
   sub: string;
   userId: string;
   tenantId: string;
+  tenantCode?: string;
+  email?: string;
+  fullName?: string;
   role: UserRole;
 };
 
-export type AuthenticatedUser = JwtPayload & {
+export type CurrentUserContext = {
+  sub: string;
+  userId: string;
+  tenantId: string;
+  tenantCode?: string;
   email?: string;
   fullName?: string;
+  role: UserRole;
 };
+
+export type AuthenticatedUser = CurrentUserContext;
