@@ -131,7 +131,7 @@ All demo accounts use password `123456`. These accounts are for local developmen
 
 ## Current Scope
 
-This repository currently contains only the NestJS foundation:
+This repository currently contains the NestJS foundation plus PostgreSQL/Prisma infrastructure:
 
 - Global configuration module
 - Global validation pipe
@@ -139,12 +139,15 @@ This repository currently contains only the NestJS foundation:
 - Global exception filter
 - Swagger/OpenAPI at `/api/docs`
 - Health endpoint at `/api/v1/health`
+- PostgreSQL Docker Compose setup
+- Prisma schema, migration, client generation, and local demo seed
 
-Auth, Prisma migrations, inventory, sales orders, invoices, payments, and other business modules are intentionally not implemented yet.
+Auth, RBAC, inventory, sales orders, invoices, payments, and other business APIs are intentionally not implemented yet.
 
 ## Project Documentation
 
-- [Requirement & Planning v3](docs/requirement-planning-v3.md)
-- [API Contract v1](docs/api-contract-v1.md)
-- [Codex Implementation Backlog v1](docs/codex-backlog-v1.md)
-- [Prisma Schema Notes v1](docs/prisma-schema-notes-v1.md)
+- [Requirement & Planning v3](docs/CoreERP_MVP_Requirement_Planning_v3_Notion.md)
+- [API Contract v1](docs/CoreERP_API_Contract_v1.md)
+- [Codex Implementation Backlog v1](docs/CoreERP_Codex_Implementation_Backlog_v1.md)
+- [Prisma Schema v1](docs/CoreERP_Prismeschema_v1.prisma)
+- [Prisma Schema Notes v1](docs/CoreERP_Prismeschema_v1_notes.md)
