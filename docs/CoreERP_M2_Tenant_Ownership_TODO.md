@@ -2,6 +2,8 @@
 
 M2 services must enforce tenant ownership in every relation lookup before creating or updating tenant-owned records.
 
+Every tenant-scoped query must include `currentUser.tenantId` from authenticated context. Future business services must never trust `tenantId` from client request bodies, query strings, or route parameters.
+
 Examples:
 
 - A `SalesOrder` must only reference a `Customer` and `Warehouse` owned by the authenticated tenant.

@@ -4,15 +4,27 @@ import {
   Injectable,
   NestInterceptor,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
 import { Observable, map } from 'rxjs';
 
+import { PaginationMeta } from '../pagination/pagination.dto';
+
 export interface ApiSuccessResponse<TData> {
-  success: true;
-  statusCode: number;
-  timestamp: string;
-  path: string;
   data: TData;
+  meta?: PaginationMeta;
+}
+
+type PaginatedData<TData> = {
+  data: TData;
+  meta: PaginationMeta;
+};
+
+function isPaginatedData<TData>(value: TData | PaginatedData<TData>): value is PaginatedData<TData> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'data' in value &&
+    'meta' in value
+  );
 }
 
 @Injectable()
@@ -23,18 +35,19 @@ export class ResponseInterceptor<TData>
     context: ExecutionContext,
     next: CallHandler<TData>,
   ): Observable<ApiSuccessResponse<TData>> {
-    const http = context.switchToHttp();
-    const request = http.getRequest<Request>();
-    const response = http.getResponse<Response>();
+    context.switchToHttp();
 
     return next.handle().pipe(
-      map((data) => ({
-        success: true,
-        statusCode: response.statusCode,
-        timestamp: new Date().toISOString(),
-        path: request.url,
-        data,
-      })),
+      map((data) => {
+        if (isPaginatedData(data)) {
+          return {
+            data: data.data,
+            meta: data.meta,
+          };
+        }
+
+        return { data };
+      }),
     );
   }
 }
