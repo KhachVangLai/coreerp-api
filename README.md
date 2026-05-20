@@ -14,7 +14,7 @@ SaaS-ready multi-tenant ERP backend for Vietnamese SMBs.
 
 ## Architecture
 
-CoreERP is built as a modular monolith. The MVP will focus on the Order-to-Cash workflow, but this foundation does not implement business modules yet.
+CoreERP is built as a modular monolith. The current MVP covers the Order-to-Cash workflow from master data and inventory through sales order fulfillment, invoicing, payment, and audit logs.
 
 ## Local Development
 
@@ -131,9 +131,19 @@ Login with `POST /api/v1/auth/login`, then call `GET /api/v1/me` with `Authoriza
 - `npm run prisma:studio` - open Prisma Studio
 - `npm run db:seed` - seed local demo tenants and users
 
+## Tests
+
+Run the full test suite:
+
+```bash
+npm test -- --runInBand
+```
+
+The test suite includes E2E coverage for the MVP Order-to-Cash flow: master data setup, stock receipt, sales order confirmation/reservation, warehouse fulfillment, invoice issue, partial/full payment, audit logs, RBAC restrictions, tenant isolation, snapshot behavior, overselling prevention, cancellation/release, and payment stock-safety rules.
+
 ## Current Scope
 
-This repository currently contains the NestJS foundation plus PostgreSQL/Prisma infrastructure:
+This repository currently contains the CoreERP MVP backend foundation and Order-to-Cash workflow:
 
 - Global configuration module
 - Global validation pipe
@@ -143,8 +153,10 @@ This repository currently contains the NestJS foundation plus PostgreSQL/Prisma 
 - Health endpoint at `/api/v1/health`
 - PostgreSQL Docker Compose setup
 - Prisma schema, migration, client generation, and local demo seed
+- Auth login/current user, RBAC guards, and tenant context helpers
+- Tenant-scoped users, customers, products, warehouses, inventory, sales orders, invoices, payments, and audit logs
 
-Auth, RBAC, inventory, sales orders, invoices, payments, and other business APIs are intentionally not implemented yet.
+Reports, Redis, Kafka, Outbox, refunds, and frontend workflows are intentionally not implemented yet.
 
 ## Project Documentation
 
