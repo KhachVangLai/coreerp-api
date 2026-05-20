@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
+import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { AuthModule } from './auth/auth.module';
 import appConfig from './config/app.config';
 import { CustomersModule } from './customers/customers.module';
@@ -21,6 +22,7 @@ import { WarehousesModule } from './warehouses/warehouses.module';
       load: [appConfig],
     }),
     PrismaModule,
+    AuditLogsModule,
     AuthModule,
     UsersModule,
     CustomersModule,

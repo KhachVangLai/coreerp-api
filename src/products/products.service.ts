@@ -1,6 +1,8 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { AuditAction } from '../audit-logs/audit-action.constants';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -68,6 +70,19 @@ export class ProductsService {
         basePrice: dto.basePrice,
       },
       select: PRODUCT_SAFE_SELECT,
+    });
+
+    await AuditLogsService.recordWithTx(this.prisma, {
+      tenantId: currentUser.tenantId,
+      actorUserId: currentUser.userId,
+      action: AuditAction.PRODUCT_CREATED,
+      entityType: 'Product',
+      entityId: product.id,
+      metadata: {
+        sku: product.sku,
+        name: product.name,
+        status: product.status,
+      },
     });
 
     return this.toResponse(product);
@@ -154,6 +169,18 @@ export class ProductsService {
         status: dto.status,
       },
       select: PRODUCT_SAFE_SELECT,
+    });
+
+    await AuditLogsService.recordWithTx(this.prisma, {
+      tenantId: currentUser.tenantId,
+      actorUserId: currentUser.userId,
+      action: AuditAction.PRODUCT_UPDATED,
+      entityType: 'Product',
+      entityId: product.id,
+      metadata: {
+        sku: product.sku,
+        status: product.status,
+      },
     });
 
     return this.toResponse(product);

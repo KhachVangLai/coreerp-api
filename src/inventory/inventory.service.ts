@@ -1,6 +1,8 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma, StockMovementType } from '@prisma/client';
 
+import { AuditAction } from '../audit-logs/audit-action.constants';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -202,6 +204,20 @@ export class InventoryService {
           select: { id: true },
         });
 
+        await AuditLogsService.recordWithTx(tx, {
+          tenantId: currentUser.tenantId,
+          actorUserId: currentUser.userId,
+          action: AuditAction.STOCK_RECEIVED,
+          entityType: 'StockItem',
+          entityId: stockItem.id,
+          metadata: {
+            warehouseId: dto.warehouseId,
+            productId: dto.productId,
+            quantity: dto.quantity,
+            movementId: movement.id,
+          },
+        });
+
         return { stockItem, movementId: movement.id };
       }),
     );
@@ -283,6 +299,21 @@ export class InventoryService {
           createdById: currentUser.userId,
         },
         select: { id: true },
+      });
+
+      await AuditLogsService.recordWithTx(tx, {
+        tenantId: currentUser.tenantId,
+        actorUserId: currentUser.userId,
+        action: AuditAction.STOCK_ADJUSTED,
+        entityType: 'StockItem',
+        entityId: stockItem.id,
+        metadata: {
+          warehouseId: dto.warehouseId,
+          productId: dto.productId,
+          movementId: movement.id,
+          beforeOnHand: existingStockItem.quantityOnHand,
+          afterOnHand: dto.newQuantityOnHand,
+        },
       });
 
       return { stockItem, movementId: movement.id };

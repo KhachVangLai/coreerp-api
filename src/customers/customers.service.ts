@@ -1,6 +1,8 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { AuditAction } from '../audit-logs/audit-action.constants';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -57,7 +59,7 @@ export class CustomersService {
       );
     }
 
-    return this.prisma.customer.create({
+    const customer = await this.prisma.customer.create({
       data: {
         tenantId: currentUser.tenantId,
         code: dto.code,
@@ -69,6 +71,21 @@ export class CustomersService {
       },
       select: CUSTOMER_SAFE_SELECT,
     });
+
+    await AuditLogsService.recordWithTx(this.prisma, {
+      tenantId: currentUser.tenantId,
+      actorUserId: currentUser.userId,
+      action: AuditAction.CUSTOMER_CREATED,
+      entityType: 'Customer',
+      entityId: customer.id,
+      metadata: {
+        code: customer.code,
+        name: customer.name,
+        type: customer.type,
+      },
+    });
+
+    return customer;
   }
 
   async listCustomers(
@@ -146,7 +163,7 @@ export class CustomersService {
       throw this.notFound();
     }
 
-    return this.prisma.customer.update({
+    const customer = await this.prisma.customer.update({
       where: { id },
       data: {
         name: dto.name,
@@ -158,6 +175,20 @@ export class CustomersService {
       },
       select: CUSTOMER_SAFE_SELECT,
     });
+
+    await AuditLogsService.recordWithTx(this.prisma, {
+      tenantId: currentUser.tenantId,
+      actorUserId: currentUser.userId,
+      action: AuditAction.CUSTOMER_UPDATED,
+      entityType: 'Customer',
+      entityId: customer.id,
+      metadata: {
+        code: customer.code,
+        status: customer.status,
+      },
+    });
+
+    return customer;
   }
 
   private notFound(): BusinessException {

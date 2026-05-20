@@ -7,6 +7,8 @@ import {
   StockReservationStatus,
 } from '@prisma/client';
 
+import { AuditAction } from '../audit-logs/audit-action.constants';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -223,7 +225,7 @@ export class SalesOrdersService {
             attempt,
           );
 
-          return tx.salesOrder.create({
+          const order = await tx.salesOrder.create({
             data: {
               tenantId: currentUser.tenantId,
               orderCode,
@@ -265,6 +267,23 @@ export class SalesOrdersService {
             },
             select: SALES_ORDER_SELECT,
           });
+
+          await AuditLogsService.recordWithTx(tx, {
+            tenantId: currentUser.tenantId,
+            actorUserId: currentUser.userId,
+            action: AuditAction.SALES_ORDER_CREATED,
+            entityType: 'SalesOrder',
+            entityId: order.id,
+            metadata: {
+              orderCode: order.orderCode,
+              status: order.status,
+              customerId: order.customerId,
+              warehouseId: order.warehouseId,
+              totalAmount: order.totalAmount.toFixed(2),
+            },
+          });
+
+          return order;
         });
 
         return this.toResponse(order);
@@ -479,7 +498,7 @@ export class SalesOrdersService {
           });
         }
 
-        return tx.salesOrder.update({
+        const updatedOrder = await tx.salesOrder.update({
           where: { id: salesOrder.id },
           data: {
             status: SalesOrderStatus.CONFIRMED,
@@ -488,6 +507,22 @@ export class SalesOrdersService {
           },
           select: SALES_ORDER_CONFIRM_SELECT,
         });
+
+        await AuditLogsService.recordWithTx(tx, {
+          tenantId: currentUser.tenantId,
+          actorUserId: currentUser.userId,
+          action: AuditAction.SALES_ORDER_CONFIRMED,
+          entityType: 'SalesOrder',
+          entityId: updatedOrder.id,
+          metadata: {
+            orderCode: updatedOrder.orderCode,
+            fromStatus: SalesOrderStatus.DRAFT,
+            toStatus: updatedOrder.status,
+            reservationCount: updatedOrder.reservations.length,
+          },
+        });
+
+        return updatedOrder;
       });
 
       return this.toConfirmResponse(order);
@@ -544,7 +579,7 @@ export class SalesOrdersService {
       }
 
       if (salesOrder.status === SalesOrderStatus.DRAFT) {
-        return tx.salesOrder.update({
+        const updatedOrder = await tx.salesOrder.update({
           where: { id: salesOrder.id },
           data: {
             status: SalesOrderStatus.CANCELLED,
@@ -553,6 +588,22 @@ export class SalesOrdersService {
           },
           select: SALES_ORDER_CANCEL_SELECT,
         });
+
+        await AuditLogsService.recordWithTx(tx, {
+          tenantId: currentUser.tenantId,
+          actorUserId: currentUser.userId,
+          action: AuditAction.SALES_ORDER_CANCELLED,
+          entityType: 'SalesOrder',
+          entityId: updatedOrder.id,
+          metadata: {
+            orderCode: updatedOrder.orderCode,
+            fromStatus: SalesOrderStatus.DRAFT,
+            toStatus: updatedOrder.status,
+            releasedReservationCount: 0,
+          },
+        });
+
+        return updatedOrder;
       }
 
       if (salesOrder.status !== SalesOrderStatus.CONFIRMED) {
@@ -637,7 +688,7 @@ export class SalesOrdersService {
         });
       }
 
-      return tx.salesOrder.update({
+      const updatedOrder = await tx.salesOrder.update({
         where: { id: salesOrder.id },
         data: {
           status: SalesOrderStatus.CANCELLED,
@@ -646,6 +697,22 @@ export class SalesOrdersService {
         },
         select: SALES_ORDER_CANCEL_SELECT,
       });
+
+      await AuditLogsService.recordWithTx(tx, {
+        tenantId: currentUser.tenantId,
+        actorUserId: currentUser.userId,
+        action: AuditAction.SALES_ORDER_CANCELLED,
+        entityType: 'SalesOrder',
+        entityId: updatedOrder.id,
+        metadata: {
+          orderCode: updatedOrder.orderCode,
+          fromStatus: SalesOrderStatus.CONFIRMED,
+          toStatus: updatedOrder.status,
+          releasedReservationCount: updatedOrder.reservations.length,
+        },
+      });
+
+      return updatedOrder;
     });
 
     return this.toCancelResponse(order);
@@ -784,7 +851,7 @@ export class SalesOrdersService {
         });
       }
 
-      return tx.salesOrder.update({
+      const updatedOrder = await tx.salesOrder.update({
         where: { id: salesOrder.id },
         data: {
           status: SalesOrderStatus.FULFILLED,
@@ -793,6 +860,22 @@ export class SalesOrdersService {
         },
         select: SALES_ORDER_FULFILL_SELECT,
       });
+
+      await AuditLogsService.recordWithTx(tx, {
+        tenantId: currentUser.tenantId,
+        actorUserId: currentUser.userId,
+        action: AuditAction.SALES_ORDER_FULFILLED,
+        entityType: 'SalesOrder',
+        entityId: updatedOrder.id,
+        metadata: {
+          orderCode: updatedOrder.orderCode,
+          fromStatus: SalesOrderStatus.CONFIRMED,
+          toStatus: updatedOrder.status,
+          committedReservationCount: updatedOrder.reservations.length,
+        },
+      });
+
+      return updatedOrder;
     });
 
     return this.toFulfillResponse(order);

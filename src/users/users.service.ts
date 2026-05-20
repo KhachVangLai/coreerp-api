@@ -2,6 +2,8 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
+import { AuditAction } from '../audit-logs/audit-action.constants';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -51,7 +53,7 @@ export class UsersService {
       );
     }
 
-    return this.prisma.user.create({
+    const user = await this.prisma.user.create({
       data: {
         tenantId: currentUser.tenantId,
         email: dto.email,
@@ -61,6 +63,21 @@ export class UsersService {
       },
       select: USER_SAFE_SELECT,
     });
+
+    await AuditLogsService.recordWithTx(this.prisma, {
+      tenantId: currentUser.tenantId,
+      actorUserId: currentUser.userId,
+      action: AuditAction.USER_CREATED,
+      entityType: 'User',
+      entityId: user.id,
+      metadata: {
+        email: user.email,
+        role: user.role,
+        status: user.status,
+      },
+    });
+
+    return user;
   }
 
   async listUsers(
@@ -134,7 +151,7 @@ export class UsersService {
       );
     }
 
-    return this.prisma.user.update({
+    const updatedUser = await this.prisma.user.update({
       where: { id },
       data: {
         fullName: dto.fullName,
@@ -143,5 +160,20 @@ export class UsersService {
       },
       select: USER_SAFE_SELECT,
     });
+
+    await AuditLogsService.recordWithTx(this.prisma, {
+      tenantId: currentUser.tenantId,
+      actorUserId: currentUser.userId,
+      action: AuditAction.USER_UPDATED,
+      entityType: 'User',
+      entityId: updatedUser.id,
+      metadata: {
+        email: updatedUser.email,
+        role: updatedUser.role,
+        status: updatedUser.status,
+      },
+    });
+
+    return updatedUser;
   }
 }

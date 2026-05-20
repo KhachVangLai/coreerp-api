@@ -9,10 +9,14 @@ import {
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { ErrorCode } from '../common/errors/error-code.enum';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditAction } from '../audit-logs/audit-action.constants';
 import { PaymentsService } from './payments.service';
 
 type MockPrisma = {
   $transaction: jest.Mock;
+  auditLog: {
+    create: jest.Mock;
+  };
   invoice: {
     count: jest.Mock;
     findFirst: jest.Mock;
@@ -97,6 +101,9 @@ describe('PaymentsService', () => {
 
         return (input as (tx: MockPrisma) => Promise<unknown>)(prisma);
       }),
+      auditLog: {
+        create: jest.fn(),
+      },
       invoice: {
         count: jest.fn(),
         findFirst: jest.fn(),
@@ -174,6 +181,19 @@ describe('PaymentsService', () => {
     expect(prisma.stockItem.update).not.toHaveBeenCalled();
     expect(prisma.stockMovement.create).not.toHaveBeenCalled();
     expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: AuditAction.PAYMENT_RECORDED,
+          entityType: 'Payment',
+          entityId: payment.id,
+          metadata: expect.objectContaining({
+            invoiceId: invoice.id,
+            paymentAmount: '300000.00',
+          }),
+        }),
+      }),
+    );
     expect(result).toEqual({
       payment: {
         id: payment.id,
@@ -334,6 +354,15 @@ describe('PaymentsService', () => {
         status: true,
       },
     });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: AuditAction.SALES_ORDER_COMPLETED,
+          entityType: 'SalesOrder',
+          entityId: invoice.salesOrder.id,
+        }),
+      }),
+    );
     expect(result.invoice.status).toBe(InvoiceStatus.PAID);
     expect(result.salesOrder.status).toBe(SalesOrderStatus.COMPLETED);
   });

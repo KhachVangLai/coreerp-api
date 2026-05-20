@@ -1,6 +1,8 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { InvoiceStatus, Prisma, SalesOrderStatus } from '@prisma/client';
 
+import { AuditAction } from '../audit-logs/audit-action.constants';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -173,6 +175,41 @@ export class PaymentsService {
               },
             })
           : invoice.salesOrder;
+
+      await AuditLogsService.recordWithTx(tx, {
+        tenantId: currentUser.tenantId,
+        actorUserId: currentUser.userId,
+        action: AuditAction.PAYMENT_RECORDED,
+        entityType: 'Payment',
+        entityId: payment.id,
+        metadata: {
+          invoiceId: invoice.id,
+          invoiceCode: invoice.invoiceCode,
+          paymentAmount: normalizeMoney(dto.amount),
+          method: dto.method,
+          invoiceStatus: updatedInvoice.status,
+          paidAmount: updatedInvoice.paidAmount.toFixed(2),
+        },
+      });
+
+      if (
+        newInvoiceStatus === InvoiceStatus.PAID &&
+        invoice.salesOrder.status === SalesOrderStatus.FULFILLED
+      ) {
+        await AuditLogsService.recordWithTx(tx, {
+          tenantId: currentUser.tenantId,
+          actorUserId: currentUser.userId,
+          action: AuditAction.SALES_ORDER_COMPLETED,
+          entityType: 'SalesOrder',
+          entityId: salesOrder.id,
+          metadata: {
+            invoiceId: invoice.id,
+            invoiceCode: invoice.invoiceCode,
+            fromStatus: SalesOrderStatus.FULFILLED,
+            toStatus: salesOrder.status,
+          },
+        });
+      }
 
       return {
         payment: this.toPaymentResponse(payment),

@@ -1,6 +1,8 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { InvoiceStatus, Prisma, SalesOrderStatus } from '@prisma/client';
 
+import { AuditAction } from '../audit-logs/audit-action.constants';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -155,7 +157,7 @@ export class InvoicesService {
             attempt,
           );
 
-          return tx.invoice.create({
+          const invoice = await tx.invoice.create({
             data: {
               tenantId: currentUser.tenantId,
               salesOrderId: salesOrder.id,
@@ -182,6 +184,22 @@ export class InvoicesService {
             },
             select: INVOICE_SELECT,
           });
+
+          await AuditLogsService.recordWithTx(tx, {
+            tenantId: currentUser.tenantId,
+            actorUserId: currentUser.userId,
+            action: AuditAction.INVOICE_GENERATED,
+            entityType: 'Invoice',
+            entityId: invoice.id,
+            metadata: {
+              invoiceCode: invoice.invoiceCode,
+              salesOrderId: invoice.salesOrderId,
+              status: invoice.status,
+              totalAmount: invoice.totalAmount.toFixed(2),
+            },
+          });
+
+          return invoice;
         });
 
         return this.toResponse(invoice);
@@ -242,7 +260,7 @@ export class InvoicesService {
         );
       }
 
-      return tx.invoice.update({
+      const invoice = await tx.invoice.update({
         where: { id: existingInvoice.id },
         data: {
           status: InvoiceStatus.ISSUED,
@@ -250,6 +268,21 @@ export class InvoicesService {
         },
         select: INVOICE_SELECT,
       });
+
+      await AuditLogsService.recordWithTx(tx, {
+        tenantId: currentUser.tenantId,
+        actorUserId: currentUser.userId,
+        action: AuditAction.INVOICE_ISSUED,
+        entityType: 'Invoice',
+        entityId: invoice.id,
+        metadata: {
+          invoiceCode: invoice.invoiceCode,
+          fromStatus: InvoiceStatus.DRAFT,
+          toStatus: invoice.status,
+        },
+      });
+
+      return invoice;
     });
 
     return this.toResponse(invoice);

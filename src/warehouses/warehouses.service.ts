@@ -1,6 +1,8 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { AuditAction } from '../audit-logs/audit-action.constants';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -54,7 +56,7 @@ export class WarehousesService {
       );
     }
 
-    return this.prisma.warehouse.create({
+    const warehouse = await this.prisma.warehouse.create({
       data: {
         tenantId: currentUser.tenantId,
         code: dto.code,
@@ -63,6 +65,21 @@ export class WarehousesService {
       },
       select: WAREHOUSE_SAFE_SELECT,
     });
+
+    await AuditLogsService.recordWithTx(this.prisma, {
+      tenantId: currentUser.tenantId,
+      actorUserId: currentUser.userId,
+      action: AuditAction.WAREHOUSE_CREATED,
+      entityType: 'Warehouse',
+      entityId: warehouse.id,
+      metadata: {
+        code: warehouse.code,
+        name: warehouse.name,
+        isActive: warehouse.isActive,
+      },
+    });
+
+    return warehouse;
   }
 
   async listWarehouses(
@@ -143,7 +160,7 @@ export class WarehousesService {
       throw this.notFound();
     }
 
-    return this.prisma.warehouse.update({
+    const warehouse = await this.prisma.warehouse.update({
       where: { id },
       data: {
         name: dto.name,
@@ -152,6 +169,20 @@ export class WarehousesService {
       },
       select: WAREHOUSE_SAFE_SELECT,
     });
+
+    await AuditLogsService.recordWithTx(this.prisma, {
+      tenantId: currentUser.tenantId,
+      actorUserId: currentUser.userId,
+      action: AuditAction.WAREHOUSE_UPDATED,
+      entityType: 'Warehouse',
+      entityId: warehouse.id,
+      metadata: {
+        code: warehouse.code,
+        isActive: warehouse.isActive,
+      },
+    });
+
+    return warehouse;
   }
 
   private notFound(): BusinessException {
