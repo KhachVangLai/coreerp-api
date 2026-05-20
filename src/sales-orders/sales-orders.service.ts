@@ -17,10 +17,12 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfirmSalesOrderDto } from './dto/confirm-sales-order.dto';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
+import { FulfillSalesOrderDto } from './dto/fulfill-sales-order.dto';
 import { ListSalesOrdersQueryDto } from './dto/list-sales-orders-query.dto';
 import {
   CancelSalesOrderResponseDto,
   ConfirmSalesOrderResponseDto,
+  FulfillSalesOrderResponseDto,
   PaginatedSalesOrderResponseDto,
   SalesOrderResponseDto,
 } from './dto/sales-order-response.dto';
@@ -34,6 +36,7 @@ const SALES_ORDER_SELECT = {
   status: true,
   confirmedAt: true,
   cancelledAt: true,
+  fulfilledAt: true,
   subtotalAmount: true,
   discountAmount: true,
   taxAmount: true,
@@ -157,6 +160,33 @@ const SALES_ORDER_CANCEL_SELECT = {
 
 type SalesOrderCancelRecord = Prisma.SalesOrderGetPayload<{
   select: typeof SALES_ORDER_CANCEL_SELECT;
+}>;
+
+const SALES_ORDER_FULFILL_SELECT = {
+  id: true,
+  orderCode: true,
+  status: true,
+  fulfilledAt: true,
+  reservations: {
+    where: {
+      status: StockReservationStatus.COMMITTED,
+    },
+    select: {
+      id: true,
+      salesOrderLineId: true,
+      warehouseId: true,
+      productId: true,
+      quantity: true,
+      status: true,
+    },
+    orderBy: {
+      id: 'asc',
+    },
+  },
+} satisfies Prisma.SalesOrderSelect;
+
+type SalesOrderFulfillRecord = Prisma.SalesOrderGetPayload<{
+  select: typeof SALES_ORDER_FULFILL_SELECT;
 }>;
 
 const MAX_ORDER_CODE_ATTEMPTS = 5;
@@ -621,6 +651,153 @@ export class SalesOrdersService {
     return this.toCancelResponse(order);
   }
 
+  async fulfillSalesOrder(
+    currentUser: AuthenticatedUser,
+    id: string,
+    dto: FulfillSalesOrderDto,
+  ): Promise<FulfillSalesOrderResponseDto> {
+    const order = await this.prisma.$transaction(async (tx) => {
+      const salesOrder = await tx.salesOrder.findFirst({
+        where: {
+          id,
+          tenantId: currentUser.tenantId,
+        },
+        select: {
+          id: true,
+          status: true,
+          reservations: {
+            where: {
+              status: StockReservationStatus.RESERVED,
+            },
+            select: {
+              id: true,
+              warehouseId: true,
+              productId: true,
+              quantity: true,
+            },
+            orderBy: {
+              id: 'asc',
+            },
+          },
+        },
+      });
+
+      if (!salesOrder) {
+        throw new BusinessException(
+          ErrorCode.NOT_FOUND,
+          'Sales order not found',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      if (salesOrder.status !== SalesOrderStatus.CONFIRMED) {
+        throw new BusinessException(
+          ErrorCode.INVALID_ORDER_STATUS,
+          'Only CONFIRMED sales orders can be fulfilled',
+          HttpStatus.CONFLICT,
+          { currentStatus: salesOrder.status },
+        );
+      }
+
+      if (salesOrder.reservations.length === 0) {
+        throw new BusinessException(
+          ErrorCode.CONFLICT,
+          'Sales order has no reserved stock to fulfill',
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      for (const reservation of salesOrder.reservations) {
+        const stockItem = await this.lockStockItem(
+          tx,
+          currentUser.tenantId,
+          reservation.warehouseId,
+          reservation.productId,
+        );
+
+        if (!stockItem) {
+          throw new BusinessException(
+            ErrorCode.NOT_FOUND,
+            'Stock item not found',
+            HttpStatus.NOT_FOUND,
+            {
+              warehouseId: reservation.warehouseId,
+              productId: reservation.productId,
+            },
+          );
+        }
+
+        const afterOnHand = stockItem.quantityOnHand - reservation.quantity;
+        const afterReserved =
+          stockItem.quantityReserved - reservation.quantity;
+
+        if (afterOnHand < 0 || afterReserved < 0) {
+          throw new BusinessException(
+            ErrorCode.CONFLICT,
+            'Stock quantity cannot become negative',
+            HttpStatus.CONFLICT,
+            {
+              productId: reservation.productId,
+              quantityOnHand: stockItem.quantityOnHand,
+              quantityReserved: stockItem.quantityReserved,
+              commitQuantity: reservation.quantity,
+            },
+          );
+        }
+
+        await tx.stockItem.update({
+          where: { id: stockItem.id },
+          data: {
+            quantityOnHand: afterOnHand,
+            quantityReserved: afterReserved,
+            version: { increment: 1 },
+          },
+          select: { id: true },
+        });
+
+        await tx.stockReservation.update({
+          where: { id: reservation.id },
+          data: {
+            status: StockReservationStatus.COMMITTED,
+            committedAt: new Date(),
+          },
+          select: { id: true },
+        });
+
+        await tx.stockMovement.create({
+          data: {
+            tenantId: currentUser.tenantId,
+            warehouseId: reservation.warehouseId,
+            productId: reservation.productId,
+            type: StockMovementType.OUT,
+            quantity: reservation.quantity,
+            beforeOnHand: stockItem.quantityOnHand,
+            afterOnHand,
+            beforeReserved: stockItem.quantityReserved,
+            afterReserved,
+            referenceType: 'SALES_ORDER',
+            referenceId: salesOrder.id,
+            createdById: currentUser.userId,
+            note: dto.note,
+          },
+          select: { id: true },
+        });
+      }
+
+      return tx.salesOrder.update({
+        where: { id: salesOrder.id },
+        data: {
+          status: SalesOrderStatus.FULFILLED,
+          fulfilledById: currentUser.userId,
+          fulfilledAt: new Date(),
+        },
+        select: SALES_ORDER_FULFILL_SELECT,
+      });
+    });
+
+    return this.toFulfillResponse(order);
+  }
+
   private async validateOrderRelations(
     tx: Prisma.TransactionClient,
     currentUser: AuthenticatedUser,
@@ -759,6 +936,7 @@ export class SalesOrdersService {
       status: order.status,
       confirmedAt: order.confirmedAt,
       cancelledAt: order.cancelledAt,
+      fulfilledAt: order.fulfilledAt,
       subtotalAmount: order.subtotalAmount.toFixed(2),
       discountAmount: order.discountAmount.toFixed(2),
       taxAmount: order.taxAmount.toFixed(2),
@@ -826,6 +1004,25 @@ export class SalesOrdersService {
       status: order.status,
       cancelledAt: order.cancelledAt,
       releasedReservations: order.reservations.map((reservation) => ({
+        id: reservation.id,
+        salesOrderLineId: reservation.salesOrderLineId,
+        warehouseId: reservation.warehouseId,
+        productId: reservation.productId,
+        quantity: reservation.quantity,
+        status: reservation.status,
+      })),
+    };
+  }
+
+  private toFulfillResponse(
+    order: SalesOrderFulfillRecord,
+  ): FulfillSalesOrderResponseDto {
+    return {
+      id: order.id,
+      orderCode: order.orderCode,
+      status: order.status,
+      fulfilledAt: order.fulfilledAt,
+      committedReservations: order.reservations.map((reservation) => ({
         id: reservation.id,
         salesOrderLineId: reservation.salesOrderLineId,
         warehouseId: reservation.warehouseId,

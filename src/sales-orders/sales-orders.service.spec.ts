@@ -139,6 +139,23 @@ describe('SalesOrdersService', () => {
     reservations: [],
   };
 
+  const fulfilledOrder = {
+    id: createdOrder.id,
+    orderCode: createdOrder.orderCode,
+    status: SalesOrderStatus.FULFILLED,
+    fulfilledAt: new Date('2026-05-20T15:00:00.000Z'),
+    reservations: [
+      {
+        id: 'reservation-1',
+        salesOrderLineId: 'sales-order-line-1',
+        warehouseId: warehouse.id,
+        productId: product.id,
+        quantity: 5,
+        status: StockReservationStatus.COMMITTED,
+      },
+    ],
+  };
+
   beforeEach(() => {
     prisma = {
       $transaction: jest.fn((input: unknown) => {
@@ -904,6 +921,241 @@ describe('SalesOrdersService', () => {
       response: {
         code: ErrorCode.CONFLICT,
         message: 'Reserved quantity cannot become negative',
+      },
+      status: HttpStatus.CONFLICT,
+    });
+    expect(prisma.stockItem.update).not.toHaveBeenCalled();
+    expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+    expect(prisma.salesOrder.update).not.toHaveBeenCalled();
+  });
+
+  it('fulfills a CONFIRMED order and commits reserved stock OUT', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status: SalesOrderStatus.CONFIRMED,
+      reservations: [
+        {
+          id: 'reservation-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'stock-item-1',
+        quantityOnHand: 10,
+        quantityReserved: 5,
+      },
+    ]);
+    prisma.stockItem.update.mockResolvedValue({ id: 'stock-item-1' });
+    prisma.stockReservation.update.mockResolvedValue({ id: 'reservation-1' });
+    prisma.stockMovement.create.mockResolvedValue({ id: 'movement-out-1' });
+    prisma.salesOrder.update.mockResolvedValue(fulfilledOrder);
+
+    const result = await service.fulfillSalesOrder(admin, createdOrder.id, {
+      note: 'Picked and shipped',
+    });
+
+    expect(prisma.salesOrder.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: createdOrder.id,
+        tenantId: admin.tenantId,
+      },
+      select: expect.objectContaining({
+        id: true,
+        status: true,
+      }),
+    });
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.stockItem.update).toHaveBeenCalledWith({
+      where: { id: 'stock-item-1' },
+      data: {
+        quantityOnHand: 5,
+        quantityReserved: 0,
+        version: { increment: 1 },
+      },
+      select: { id: true },
+    });
+    expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+      where: { id: 'reservation-1' },
+      data: {
+        status: StockReservationStatus.COMMITTED,
+        committedAt: expect.any(Date),
+      },
+      select: { id: true },
+    });
+    expect(prisma.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: StockMovementType.OUT,
+          quantity: 5,
+          beforeOnHand: 10,
+          afterOnHand: 5,
+          beforeReserved: 5,
+          afterReserved: 0,
+          referenceType: 'SALES_ORDER',
+          referenceId: createdOrder.id,
+          createdById: admin.userId,
+          note: 'Picked and shipped',
+        }),
+      }),
+    );
+    expect(prisma.stockMovement.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: StockMovementType.RELEASE }),
+      }),
+    );
+    expect(prisma.salesOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: createdOrder.id },
+        data: expect.objectContaining({
+          status: SalesOrderStatus.FULFILLED,
+          fulfilledById: admin.userId,
+          fulfilledAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      id: fulfilledOrder.id,
+      orderCode: fulfilledOrder.orderCode,
+      status: SalesOrderStatus.FULFILLED,
+      fulfilledAt: fulfilledOrder.fulfilledAt,
+      committedReservations: fulfilledOrder.reservations,
+    });
+  });
+
+  it('allows WAREHOUSE to fulfill a CONFIRMED order when caller context is valid', async () => {
+    const warehouseUser: AuthenticatedUser = {
+      ...admin,
+      userId: 'warehouse-1',
+      role: UserRole.WAREHOUSE,
+    };
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status: SalesOrderStatus.CONFIRMED,
+      reservations: [
+        {
+          id: 'reservation-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'stock-item-1',
+        quantityOnHand: 10,
+        quantityReserved: 5,
+      },
+    ]);
+    prisma.stockItem.update.mockResolvedValue({ id: 'stock-item-1' });
+    prisma.stockReservation.update.mockResolvedValue({ id: 'reservation-1' });
+    prisma.stockMovement.create.mockResolvedValue({ id: 'movement-out-1' });
+    prisma.salesOrder.update.mockResolvedValue(fulfilledOrder);
+
+    await service.fulfillSalesOrder(warehouseUser, createdOrder.id, {});
+
+    expect(prisma.salesOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ fulfilledById: warehouseUser.userId }),
+      }),
+    );
+  });
+
+  it.each([
+    SalesOrderStatus.DRAFT,
+    SalesOrderStatus.FULFILLED,
+    SalesOrderStatus.COMPLETED,
+    SalesOrderStatus.CANCELLED,
+  ])('returns INVALID_ORDER_STATUS when fulfilling %s order', async (status) => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status,
+      reservations: [],
+    });
+
+    await expect(
+      service.fulfillSalesOrder(admin, createdOrder.id, {
+        note: 'Picked and shipped',
+      }),
+    ).rejects.toMatchObject({
+      response: {
+        code: ErrorCode.INVALID_ORDER_STATUS,
+        message: 'Only CONFIRMED sales orders can be fulfilled',
+      },
+      status: HttpStatus.CONFLICT,
+    });
+    expect(prisma.stockItem.update).not.toHaveBeenCalled();
+    expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('returns NOT_FOUND for cross-tenant fulfill', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.fulfillSalesOrder(admin, 'tenant-b-sales-order', {
+        note: 'Picked and shipped',
+      }),
+    ).rejects.toMatchObject({
+      response: { code: ErrorCode.NOT_FOUND, message: 'Sales order not found' },
+      status: HttpStatus.NOT_FOUND,
+    });
+  });
+
+  it('rejects CONFIRMED order without reserved stock', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status: SalesOrderStatus.CONFIRMED,
+      reservations: [],
+    });
+
+    await expect(
+      service.fulfillSalesOrder(admin, createdOrder.id, {}),
+    ).rejects.toMatchObject({
+      response: {
+        code: ErrorCode.CONFLICT,
+        message: 'Sales order has no reserved stock to fulfill',
+      },
+      status: HttpStatus.CONFLICT,
+    });
+    expect(prisma.stockItem.update).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('does not partially commit inventory when stock would become negative', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status: SalesOrderStatus.CONFIRMED,
+      reservations: [
+        {
+          id: 'reservation-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'stock-item-1',
+        quantityOnHand: 4,
+        quantityReserved: 5,
+      },
+    ]);
+
+    await expect(
+      service.fulfillSalesOrder(admin, createdOrder.id, {}),
+    ).rejects.toMatchObject({
+      response: {
+        code: ErrorCode.CONFLICT,
+        message: 'Stock quantity cannot become negative',
       },
       status: HttpStatus.CONFLICT,
     });

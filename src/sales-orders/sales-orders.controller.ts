@@ -32,10 +32,12 @@ import { ApiSuccessResponseDto } from '../common/dto/api-success-response.dto';
 import { CancelSalesOrderDto } from './dto/cancel-sales-order.dto';
 import { ConfirmSalesOrderDto } from './dto/confirm-sales-order.dto';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
+import { FulfillSalesOrderDto } from './dto/fulfill-sales-order.dto';
 import { ListSalesOrdersQueryDto } from './dto/list-sales-orders-query.dto';
 import {
   CancelSalesOrderResponseDto,
   ConfirmSalesOrderResponseDto,
+  FulfillSalesOrderResponseDto,
   PaginatedSalesOrderResponseDto,
   SalesOrderCustomerSummaryDto,
   SalesOrderInvoiceSummaryDto,
@@ -48,6 +50,7 @@ import {
 import { SalesOrdersService } from './sales-orders.service';
 
 const SALES_ORDER_CREATE_ROLES = [UserRole.TENANT_ADMIN, UserRole.SALES];
+const SALES_ORDER_FULFILL_ROLES = [UserRole.TENANT_ADMIN, UserRole.WAREHOUSE];
 const SALES_ORDER_READ_ROLES = [
   UserRole.TENANT_ADMIN,
   UserRole.SALES,
@@ -63,6 +66,7 @@ const SALES_ORDER_READ_ROLES = [
   ApiErrorResponseDto,
   CancelSalesOrderResponseDto,
   ConfirmSalesOrderResponseDto,
+  FulfillSalesOrderResponseDto,
   SalesOrderResponseDto,
   SalesOrderLineResponseDto,
   SalesOrderCustomerSummaryDto,
@@ -208,5 +212,32 @@ export class SalesOrdersController {
     @Body() dto: CancelSalesOrderDto,
   ): Promise<CancelSalesOrderResponseDto> {
     return this.salesOrdersService.cancelSalesOrder(currentUser, id, dto);
+  }
+
+  @Patch(':id/fulfill')
+  @Roles(...SALES_ORDER_FULFILL_ROLES)
+  @ApiOkResponse({
+    description: 'Confirmed sales order fulfilled and reserved stock committed',
+    schema: {
+      allOf: [
+        { $ref: getSchemaPath(ApiSuccessResponseDto) },
+        {
+          properties: {
+            data: { $ref: getSchemaPath(FulfillSalesOrderResponseDto) },
+          },
+        },
+      ],
+    },
+  })
+  @ApiUnauthorizedResponse({ type: ApiErrorResponseDto })
+  @ApiForbiddenResponse({ type: ApiErrorResponseDto })
+  @ApiNotFoundResponse({ type: ApiErrorResponseDto })
+  @ApiConflictResponse({ type: ApiErrorResponseDto })
+  fulfillSalesOrder(
+    @CurrentUser() currentUser: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: FulfillSalesOrderDto,
+  ): Promise<FulfillSalesOrderResponseDto> {
+    return this.salesOrdersService.fulfillSalesOrder(currentUser, id, dto);
   }
 }
