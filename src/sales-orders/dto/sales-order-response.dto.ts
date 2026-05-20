@@ -110,6 +110,9 @@ export class SalesOrderResponseDto {
   @ApiPropertyOptional({ example: '2026-05-20T12:00:00.000Z', nullable: true })
   confirmedAt?: Date | null;
 
+  @ApiPropertyOptional({ example: '2026-05-20T12:00:00.000Z', nullable: true })
+  cancelledAt?: Date | null;
+
   @ApiProperty({ example: '600000.00' })
   subtotalAmount!: string;
 
@@ -184,4 +187,21 @@ export class ConfirmSalesOrderResponseDto {
 
   @ApiProperty({ type: [SalesOrderReservationSummaryDto] })
   reservations!: SalesOrderReservationSummaryDto[];
+}
+
+export class CancelSalesOrderResponseDto {
+  @ApiProperty({ example: '7dfc5a25-5f0f-46f4-a7cb-8f3e8dc7f9cc' })
+  id!: string;
+
+  @ApiProperty({ example: 'SO-20260520-0001' })
+  orderCode!: string;
+
+  @ApiProperty({ enum: SalesOrderStatus, example: SalesOrderStatus.CANCELLED })
+  status!: SalesOrderStatus;
+
+  @ApiProperty({ example: '2026-05-20T12:00:00.000Z' })
+  cancelledAt!: Date | null;
+
+  @ApiProperty({ type: [SalesOrderReservationSummaryDto] })
+  releasedReservations!: SalesOrderReservationSummaryDto[];
 }

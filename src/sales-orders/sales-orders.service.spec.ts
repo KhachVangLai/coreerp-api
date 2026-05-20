@@ -43,6 +43,7 @@ type MockPrisma = {
   };
   stockReservation: {
     create: jest.Mock;
+    update: jest.Mock;
   };
   warehouse: {
     findFirst: jest.Mock;
@@ -130,6 +131,14 @@ describe('SalesOrdersService', () => {
     reservations: [],
   };
 
+  const cancelledOrder = {
+    id: createdOrder.id,
+    orderCode: createdOrder.orderCode,
+    status: SalesOrderStatus.CANCELLED,
+    cancelledAt: new Date('2026-05-20T14:00:00.000Z'),
+    reservations: [],
+  };
+
   beforeEach(() => {
     prisma = {
       $transaction: jest.fn((input: unknown) => {
@@ -167,6 +176,7 @@ describe('SalesOrdersService', () => {
       },
       stockReservation: {
         create: jest.fn(),
+        update: jest.fn(),
       },
       warehouse: {
         findFirst: jest.fn(),
@@ -667,5 +677,239 @@ describe('SalesOrdersService', () => {
     expect(prisma.stockItem.update).not.toHaveBeenCalled();
     expect(prisma.stockReservation.create).not.toHaveBeenCalled();
     expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('cancels a DRAFT order without inventory changes', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status: SalesOrderStatus.DRAFT,
+      reservations: [],
+    });
+    prisma.salesOrder.update.mockResolvedValue(cancelledOrder);
+
+    const result = await service.cancelSalesOrder(admin, createdOrder.id, {
+      reason: 'Customer cancelled',
+    });
+
+    expect(prisma.salesOrder.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: createdOrder.id,
+        tenantId: admin.tenantId,
+      },
+      select: expect.objectContaining({
+        id: true,
+        status: true,
+      }),
+    });
+    expect(prisma.salesOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: createdOrder.id },
+        data: expect.objectContaining({
+          status: SalesOrderStatus.CANCELLED,
+          cancelledById: admin.userId,
+          cancelledAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.stockItem.update).not.toHaveBeenCalled();
+    expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      id: cancelledOrder.id,
+      orderCode: cancelledOrder.orderCode,
+      status: SalesOrderStatus.CANCELLED,
+      cancelledAt: cancelledOrder.cancelledAt,
+      releasedReservations: [],
+    });
+  });
+
+  it('allows SALES to cancel a DRAFT order when caller context is valid', async () => {
+    const salesUser: AuthenticatedUser = {
+      ...admin,
+      userId: 'sales-1',
+      role: UserRole.SALES,
+    };
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status: SalesOrderStatus.DRAFT,
+      reservations: [],
+    });
+    prisma.salesOrder.update.mockResolvedValue(cancelledOrder);
+
+    await service.cancelSalesOrder(salesUser, createdOrder.id, {
+      reason: 'Customer cancelled',
+    });
+
+    expect(prisma.salesOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ cancelledById: salesUser.userId }),
+      }),
+    );
+  });
+
+  it('cancels a CONFIRMED order and releases reservations', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status: SalesOrderStatus.CONFIRMED,
+      reservations: [
+        {
+          id: 'reservation-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'stock-item-1',
+        quantityOnHand: 10,
+        quantityReserved: 5,
+      },
+    ]);
+    prisma.stockItem.update.mockResolvedValue({ id: 'stock-item-1' });
+    prisma.stockReservation.update.mockResolvedValue({ id: 'reservation-1' });
+    prisma.stockMovement.create.mockResolvedValue({ id: 'movement-release-1' });
+    prisma.salesOrder.update.mockResolvedValue({
+      ...cancelledOrder,
+      reservations: [
+        {
+          id: 'reservation-1',
+          salesOrderLineId: 'sales-order-line-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+          status: StockReservationStatus.RELEASED,
+        },
+      ],
+    });
+
+    const result = await service.cancelSalesOrder(admin, createdOrder.id, {
+      reason: 'Customer cancelled',
+    });
+
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.stockItem.update).toHaveBeenCalledWith({
+      where: { id: 'stock-item-1' },
+      data: {
+        quantityReserved: 0,
+        version: { increment: 1 },
+      },
+      select: { id: true },
+    });
+    expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+      where: { id: 'reservation-1' },
+      data: {
+        status: StockReservationStatus.RELEASED,
+        releasedAt: expect.any(Date),
+      },
+      select: { id: true },
+    });
+    expect(prisma.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: StockMovementType.RELEASE,
+          quantity: 5,
+          beforeOnHand: 10,
+          afterOnHand: 10,
+          beforeReserved: 5,
+          afterReserved: 0,
+          referenceType: 'SALES_ORDER',
+          referenceId: createdOrder.id,
+          createdById: admin.userId,
+          note: 'Customer cancelled',
+        }),
+      }),
+    );
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+    expect(result.releasedReservations).toEqual([
+      {
+        id: 'reservation-1',
+        salesOrderLineId: 'sales-order-line-1',
+        warehouseId: warehouse.id,
+        productId: product.id,
+        quantity: 5,
+        status: StockReservationStatus.RELEASED,
+      },
+    ]);
+  });
+
+  it.each([
+    SalesOrderStatus.FULFILLED,
+    SalesOrderStatus.COMPLETED,
+    SalesOrderStatus.CANCELLED,
+  ])('returns INVALID_ORDER_STATUS when cancelling %s order', async (status) => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status,
+      reservations: [],
+    });
+
+    await expect(
+      service.cancelSalesOrder(admin, createdOrder.id, {
+        reason: 'Customer cancelled',
+      }),
+    ).rejects.toMatchObject({
+      response: {
+        code: ErrorCode.INVALID_ORDER_STATUS,
+        message: 'Only DRAFT or CONFIRMED sales orders can be cancelled',
+      },
+      status: HttpStatus.CONFLICT,
+    });
+    expect(prisma.stockItem.update).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('returns NOT_FOUND for cross-tenant cancel', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.cancelSalesOrder(admin, 'tenant-b-sales-order', {
+        reason: 'Customer cancelled',
+      }),
+    ).rejects.toMatchObject({
+      response: { code: ErrorCode.NOT_FOUND, message: 'Sales order not found' },
+      status: HttpStatus.NOT_FOUND,
+    });
+  });
+
+  it('does not partially release inventory when a release fails', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      status: SalesOrderStatus.CONFIRMED,
+      reservations: [
+        {
+          id: 'reservation-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'stock-item-1',
+        quantityOnHand: 10,
+        quantityReserved: 4,
+      },
+    ]);
+
+    await expect(
+      service.cancelSalesOrder(admin, createdOrder.id, {
+        reason: 'Customer cancelled',
+      }),
+    ).rejects.toMatchObject({
+      response: {
+        code: ErrorCode.CONFLICT,
+        message: 'Reserved quantity cannot become negative',
+      },
+      status: HttpStatus.CONFLICT,
+    });
+    expect(prisma.stockItem.update).not.toHaveBeenCalled();
+    expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+    expect(prisma.salesOrder.update).not.toHaveBeenCalled();
   });
 });

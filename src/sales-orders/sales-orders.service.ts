@@ -19,10 +19,12 @@ import { ConfirmSalesOrderDto } from './dto/confirm-sales-order.dto';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { ListSalesOrdersQueryDto } from './dto/list-sales-orders-query.dto';
 import {
+  CancelSalesOrderResponseDto,
   ConfirmSalesOrderResponseDto,
   PaginatedSalesOrderResponseDto,
   SalesOrderResponseDto,
 } from './dto/sales-order-response.dto';
+import { CancelSalesOrderDto } from './dto/cancel-sales-order.dto';
 
 const SALES_ORDER_SELECT = {
   id: true,
@@ -31,6 +33,7 @@ const SALES_ORDER_SELECT = {
   warehouseId: true,
   status: true,
   confirmedAt: true,
+  cancelledAt: true,
   subtotalAmount: true,
   discountAmount: true,
   taxAmount: true,
@@ -127,6 +130,33 @@ const SALES_ORDER_CONFIRM_SELECT = {
 
 type SalesOrderConfirmRecord = Prisma.SalesOrderGetPayload<{
   select: typeof SALES_ORDER_CONFIRM_SELECT;
+}>;
+
+const SALES_ORDER_CANCEL_SELECT = {
+  id: true,
+  orderCode: true,
+  status: true,
+  cancelledAt: true,
+  reservations: {
+    where: {
+      status: StockReservationStatus.RELEASED,
+    },
+    select: {
+      id: true,
+      salesOrderLineId: true,
+      warehouseId: true,
+      productId: true,
+      quantity: true,
+      status: true,
+    },
+    orderBy: {
+      id: 'asc',
+    },
+  },
+} satisfies Prisma.SalesOrderSelect;
+
+type SalesOrderCancelRecord = Prisma.SalesOrderGetPayload<{
+  select: typeof SALES_ORDER_CANCEL_SELECT;
 }>;
 
 const MAX_ORDER_CODE_ATTEMPTS = 5;
@@ -444,6 +474,153 @@ export class SalesOrdersService {
     }
   }
 
+  async cancelSalesOrder(
+    currentUser: AuthenticatedUser,
+    id: string,
+    dto: CancelSalesOrderDto,
+  ): Promise<CancelSalesOrderResponseDto> {
+    const order = await this.prisma.$transaction(async (tx) => {
+      const salesOrder = await tx.salesOrder.findFirst({
+        where: {
+          id,
+          tenantId: currentUser.tenantId,
+        },
+        select: {
+          id: true,
+          status: true,
+          reservations: {
+            where: {
+              status: StockReservationStatus.RESERVED,
+            },
+            select: {
+              id: true,
+              warehouseId: true,
+              productId: true,
+              quantity: true,
+            },
+            orderBy: {
+              id: 'asc',
+            },
+          },
+        },
+      });
+
+      if (!salesOrder) {
+        throw new BusinessException(
+          ErrorCode.NOT_FOUND,
+          'Sales order not found',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      if (salesOrder.status === SalesOrderStatus.DRAFT) {
+        return tx.salesOrder.update({
+          where: { id: salesOrder.id },
+          data: {
+            status: SalesOrderStatus.CANCELLED,
+            cancelledById: currentUser.userId,
+            cancelledAt: new Date(),
+          },
+          select: SALES_ORDER_CANCEL_SELECT,
+        });
+      }
+
+      if (salesOrder.status !== SalesOrderStatus.CONFIRMED) {
+        throw new BusinessException(
+          ErrorCode.INVALID_ORDER_STATUS,
+          'Only DRAFT or CONFIRMED sales orders can be cancelled',
+          HttpStatus.CONFLICT,
+          { currentStatus: salesOrder.status },
+        );
+      }
+
+      for (const reservation of salesOrder.reservations) {
+        const stockItem = await this.lockStockItem(
+          tx,
+          currentUser.tenantId,
+          reservation.warehouseId,
+          reservation.productId,
+        );
+
+        if (!stockItem) {
+          throw new BusinessException(
+            ErrorCode.NOT_FOUND,
+            'Stock item not found',
+            HttpStatus.NOT_FOUND,
+            {
+              warehouseId: reservation.warehouseId,
+              productId: reservation.productId,
+            },
+          );
+        }
+
+        const afterReserved = stockItem.quantityReserved - reservation.quantity;
+
+        if (afterReserved < 0) {
+          throw new BusinessException(
+            ErrorCode.CONFLICT,
+            'Reserved quantity cannot become negative',
+            HttpStatus.CONFLICT,
+            {
+              productId: reservation.productId,
+              quantityReserved: stockItem.quantityReserved,
+              releaseQuantity: reservation.quantity,
+            },
+          );
+        }
+
+        await tx.stockItem.update({
+          where: { id: stockItem.id },
+          data: {
+            quantityReserved: afterReserved,
+            version: { increment: 1 },
+          },
+          select: { id: true },
+        });
+
+        await tx.stockReservation.update({
+          where: { id: reservation.id },
+          data: {
+            status: StockReservationStatus.RELEASED,
+            releasedAt: new Date(),
+          },
+          select: { id: true },
+        });
+
+        await tx.stockMovement.create({
+          data: {
+            tenantId: currentUser.tenantId,
+            warehouseId: reservation.warehouseId,
+            productId: reservation.productId,
+            type: StockMovementType.RELEASE,
+            quantity: reservation.quantity,
+            beforeOnHand: stockItem.quantityOnHand,
+            afterOnHand: stockItem.quantityOnHand,
+            beforeReserved: stockItem.quantityReserved,
+            afterReserved,
+            referenceType: 'SALES_ORDER',
+            referenceId: salesOrder.id,
+            createdById: currentUser.userId,
+            note: dto.reason,
+          },
+          select: { id: true },
+        });
+      }
+
+      return tx.salesOrder.update({
+        where: { id: salesOrder.id },
+        data: {
+          status: SalesOrderStatus.CANCELLED,
+          cancelledById: currentUser.userId,
+          cancelledAt: new Date(),
+        },
+        select: SALES_ORDER_CANCEL_SELECT,
+      });
+    });
+
+    return this.toCancelResponse(order);
+  }
+
   private async validateOrderRelations(
     tx: Prisma.TransactionClient,
     currentUser: AuthenticatedUser,
@@ -581,6 +758,7 @@ export class SalesOrdersService {
       warehouseId: order.warehouseId,
       status: order.status,
       confirmedAt: order.confirmedAt,
+      cancelledAt: order.cancelledAt,
       subtotalAmount: order.subtotalAmount.toFixed(2),
       discountAmount: order.discountAmount.toFixed(2),
       taxAmount: order.taxAmount.toFixed(2),
@@ -629,6 +807,25 @@ export class SalesOrdersService {
       status: order.status,
       confirmedAt: order.confirmedAt,
       reservations: order.reservations.map((reservation) => ({
+        id: reservation.id,
+        salesOrderLineId: reservation.salesOrderLineId,
+        warehouseId: reservation.warehouseId,
+        productId: reservation.productId,
+        quantity: reservation.quantity,
+        status: reservation.status,
+      })),
+    };
+  }
+
+  private toCancelResponse(
+    order: SalesOrderCancelRecord,
+  ): CancelSalesOrderResponseDto {
+    return {
+      id: order.id,
+      orderCode: order.orderCode,
+      status: order.status,
+      cancelledAt: order.cancelledAt,
+      releasedReservations: order.reservations.map((reservation) => ({
         id: reservation.id,
         salesOrderLineId: reservation.salesOrderLineId,
         warehouseId: reservation.warehouseId,
