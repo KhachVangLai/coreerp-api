@@ -63,6 +63,38 @@ describe('SalesOrdersController authorization metadata', () => {
     },
   );
 
+  it('allows TENANT_ADMIN and SALES to confirm sales orders', () => {
+    const guard = new RolesGuard(new Reflector());
+
+    expect(
+      guard.canActivate(
+        createContext(controller, 'confirmSalesOrder', UserRole.TENANT_ADMIN),
+      ),
+    ).toBe(true);
+    expect(
+      guard.canActivate(
+        createContext(controller, 'confirmSalesOrder', UserRole.SALES),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([UserRole.WAREHOUSE, UserRole.FINANCE, UserRole.VIEWER])(
+    'rejects %s from confirming sales orders',
+    (role) => {
+      const guard = new RolesGuard(new Reflector());
+
+      try {
+        guard.canActivate(createContext(controller, 'confirmSalesOrder', role));
+        fail('RolesGuard should reject non-sales-order confirmers');
+      } catch (error) {
+        expect(error).toBeInstanceOf(BusinessException);
+        expect(error).toMatchObject({
+          response: expect.objectContaining({ code: ErrorCode.FORBIDDEN }),
+        });
+      }
+    },
+  );
+
   it('allows tenant roles to list and read sales orders', () => {
     const guard = new RolesGuard(new Reflector());
 

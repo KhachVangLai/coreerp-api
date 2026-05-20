@@ -1,5 +1,11 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { Prisma, RecordStatus, SalesOrderStatus } from '@prisma/client';
+import {
+  Prisma,
+  RecordStatus,
+  SalesOrderStatus,
+  StockMovementType,
+  StockReservationStatus,
+} from '@prisma/client';
 
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { BusinessException } from '../common/errors/business.exception';
@@ -9,9 +15,11 @@ import {
   getPaginationSkip,
 } from '../common/pagination/pagination.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConfirmSalesOrderDto } from './dto/confirm-sales-order.dto';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { ListSalesOrdersQueryDto } from './dto/list-sales-orders-query.dto';
 import {
+  ConfirmSalesOrderResponseDto,
   PaginatedSalesOrderResponseDto,
   SalesOrderResponseDto,
 } from './dto/sales-order-response.dto';
@@ -22,6 +30,7 @@ const SALES_ORDER_SELECT = {
   customerId: true,
   warehouseId: true,
   status: true,
+  confirmedAt: true,
   subtotalAmount: true,
   discountAmount: true,
   taxAmount: true,
@@ -70,6 +79,8 @@ const SALES_ORDER_SELECT = {
   reservations: {
     select: {
       id: true,
+      salesOrderLineId: true,
+      warehouseId: true,
       productId: true,
       quantity: true,
       status: true,
@@ -87,6 +98,36 @@ type ProductSnapshot = {
   name: string;
   unit: string;
 };
+
+type LockedStockItem = {
+  id: string;
+  quantityOnHand: number;
+  quantityReserved: number;
+};
+
+const SALES_ORDER_CONFIRM_SELECT = {
+  id: true,
+  orderCode: true,
+  status: true,
+  confirmedAt: true,
+  reservations: {
+    select: {
+      id: true,
+      salesOrderLineId: true,
+      warehouseId: true,
+      productId: true,
+      quantity: true,
+      status: true,
+    },
+    orderBy: {
+      id: 'asc',
+    },
+  },
+} satisfies Prisma.SalesOrderSelect;
+
+type SalesOrderConfirmRecord = Prisma.SalesOrderGetPayload<{
+  select: typeof SALES_ORDER_CONFIRM_SELECT;
+}>;
 
 const MAX_ORDER_CODE_ATTEMPTS = 5;
 
@@ -244,6 +285,165 @@ export class SalesOrdersService {
     return this.toResponse(order);
   }
 
+  async confirmSalesOrder(
+    currentUser: AuthenticatedUser,
+    id: string,
+    dto: ConfirmSalesOrderDto,
+  ): Promise<ConfirmSalesOrderResponseDto> {
+    try {
+      const order = await this.prisma.$transaction(async (tx) => {
+        const salesOrder = await tx.salesOrder.findFirst({
+          where: {
+            id,
+            tenantId: currentUser.tenantId,
+          },
+          select: {
+            id: true,
+            warehouseId: true,
+            status: true,
+            lines: {
+              select: {
+                id: true,
+                productId: true,
+                quantity: true,
+              },
+              orderBy: {
+                id: 'asc',
+              },
+            },
+          },
+        });
+
+        if (!salesOrder) {
+          throw new BusinessException(
+            ErrorCode.NOT_FOUND,
+            'Sales order not found',
+            HttpStatus.NOT_FOUND,
+          );
+        }
+
+        if (salesOrder.status !== SalesOrderStatus.DRAFT) {
+          throw new BusinessException(
+            ErrorCode.INVALID_ORDER_STATUS,
+            'Only DRAFT sales orders can be confirmed',
+            HttpStatus.CONFLICT,
+            { currentStatus: salesOrder.status },
+          );
+        }
+
+        if (salesOrder.lines.length === 0) {
+          throw new BusinessException(
+            ErrorCode.CONFLICT,
+            'Sales order must have at least one line',
+            HttpStatus.CONFLICT,
+          );
+        }
+
+        for (const line of salesOrder.lines) {
+          const stockItem = await this.lockStockItem(
+            tx,
+            currentUser.tenantId,
+            salesOrder.warehouseId,
+            line.productId,
+          );
+
+          if (!stockItem) {
+            throw new BusinessException(
+              ErrorCode.NOT_FOUND,
+              'Stock item not found',
+              HttpStatus.NOT_FOUND,
+              {
+                warehouseId: salesOrder.warehouseId,
+                productId: line.productId,
+              },
+            );
+          }
+
+          const availableQuantity =
+            stockItem.quantityOnHand - stockItem.quantityReserved;
+
+          if (availableQuantity < line.quantity) {
+            throw new BusinessException(
+              ErrorCode.INSUFFICIENT_STOCK,
+              'Available stock is not enough',
+              HttpStatus.CONFLICT,
+              {
+                productId: line.productId,
+                requestedQuantity: line.quantity,
+                availableQuantity,
+              },
+            );
+          }
+
+          const afterReserved = stockItem.quantityReserved + line.quantity;
+
+          await tx.stockItem.update({
+            where: { id: stockItem.id },
+            data: {
+              quantityReserved: afterReserved,
+              version: { increment: 1 },
+            },
+            select: { id: true },
+          });
+
+          await tx.stockReservation.create({
+            data: {
+              tenantId: currentUser.tenantId,
+              salesOrderId: salesOrder.id,
+              salesOrderLineId: line.id,
+              warehouseId: salesOrder.warehouseId,
+              productId: line.productId,
+              quantity: line.quantity,
+              status: StockReservationStatus.RESERVED,
+            },
+            select: { id: true },
+          });
+
+          await tx.stockMovement.create({
+            data: {
+              tenantId: currentUser.tenantId,
+              warehouseId: salesOrder.warehouseId,
+              productId: line.productId,
+              type: StockMovementType.RESERVE,
+              quantity: line.quantity,
+              beforeOnHand: stockItem.quantityOnHand,
+              afterOnHand: stockItem.quantityOnHand,
+              beforeReserved: stockItem.quantityReserved,
+              afterReserved,
+              referenceType: 'SALES_ORDER',
+              referenceId: salesOrder.id,
+              createdById: currentUser.userId,
+              note: dto.note,
+            },
+            select: { id: true },
+          });
+        }
+
+        return tx.salesOrder.update({
+          where: { id: salesOrder.id },
+          data: {
+            status: SalesOrderStatus.CONFIRMED,
+            confirmedById: currentUser.userId,
+            confirmedAt: new Date(),
+          },
+          select: SALES_ORDER_CONFIRM_SELECT,
+        });
+      });
+
+      return this.toConfirmResponse(order);
+    } catch (error) {
+      if (this.isUniqueOrderCodeConflict(error)) {
+        throw new BusinessException(
+          ErrorCode.CONFLICT,
+          'Sales order reservation already exists',
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      throw error;
+    }
+  }
+
   private async validateOrderRelations(
     tx: Prisma.TransactionClient,
     currentUser: AuthenticatedUser,
@@ -352,6 +552,27 @@ export class SalesOrdersService {
     );
   }
 
+  private async lockStockItem(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    warehouseId: string,
+    productId: string,
+  ): Promise<LockedStockItem | null> {
+    const stockItems = await tx.$queryRaw<LockedStockItem[]>`
+      SELECT
+        id::text AS id,
+        quantity_on_hand AS "quantityOnHand",
+        quantity_reserved AS "quantityReserved"
+      FROM stock_items
+      WHERE tenant_id = ${tenantId}::uuid
+        AND warehouse_id = ${warehouseId}::uuid
+        AND product_id = ${productId}::uuid
+      FOR UPDATE
+    `;
+
+    return stockItems[0] ?? null;
+  }
+
   private toResponse(order: SalesOrderRecord): SalesOrderResponseDto {
     return {
       id: order.id,
@@ -359,6 +580,7 @@ export class SalesOrdersService {
       customerId: order.customerId,
       warehouseId: order.warehouseId,
       status: order.status,
+      confirmedAt: order.confirmedAt,
       subtotalAmount: order.subtotalAmount.toFixed(2),
       discountAmount: order.discountAmount.toFixed(2),
       taxAmount: order.taxAmount.toFixed(2),
@@ -387,12 +609,33 @@ export class SalesOrdersService {
         : null,
       reservations: order.reservations.map((reservation) => ({
         id: reservation.id,
+        salesOrderLineId: reservation.salesOrderLineId,
+        warehouseId: reservation.warehouseId,
         productId: reservation.productId,
         quantity: reservation.quantity,
         status: reservation.status,
       })),
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
+    };
+  }
+
+  private toConfirmResponse(
+    order: SalesOrderConfirmRecord,
+  ): ConfirmSalesOrderResponseDto {
+    return {
+      id: order.id,
+      orderCode: order.orderCode,
+      status: order.status,
+      confirmedAt: order.confirmedAt,
+      reservations: order.reservations.map((reservation) => ({
+        id: reservation.id,
+        salesOrderLineId: reservation.salesOrderLineId,
+        warehouseId: reservation.warehouseId,
+        productId: reservation.productId,
+        quantity: reservation.quantity,
+        status: reservation.status,
+      })),
     };
   }
 }

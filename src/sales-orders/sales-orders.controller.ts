@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiConflictResponse,
@@ -20,9 +29,11 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { ApiErrorResponseDto } from '../common/dto/api-error-response.dto';
 import { ApiSuccessResponseDto } from '../common/dto/api-success-response.dto';
+import { ConfirmSalesOrderDto } from './dto/confirm-sales-order.dto';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { ListSalesOrdersQueryDto } from './dto/list-sales-orders-query.dto';
 import {
+  ConfirmSalesOrderResponseDto,
   PaginatedSalesOrderResponseDto,
   SalesOrderCustomerSummaryDto,
   SalesOrderInvoiceSummaryDto,
@@ -48,6 +59,7 @@ const SALES_ORDER_READ_ROLES = [
 @ApiExtraModels(
   ApiSuccessResponseDto,
   ApiErrorResponseDto,
+  ConfirmSalesOrderResponseDto,
   SalesOrderResponseDto,
   SalesOrderLineResponseDto,
   SalesOrderCustomerSummaryDto,
@@ -139,5 +151,32 @@ export class SalesOrdersController {
     @Param('id') id: string,
   ): Promise<SalesOrderResponseDto> {
     return this.salesOrdersService.getSalesOrder(currentUser, id);
+  }
+
+  @Patch(':id/confirm')
+  @Roles(...SALES_ORDER_CREATE_ROLES)
+  @ApiOkResponse({
+    description: 'Draft sales order confirmed and stock reserved',
+    schema: {
+      allOf: [
+        { $ref: getSchemaPath(ApiSuccessResponseDto) },
+        {
+          properties: {
+            data: { $ref: getSchemaPath(ConfirmSalesOrderResponseDto) },
+          },
+        },
+      ],
+    },
+  })
+  @ApiUnauthorizedResponse({ type: ApiErrorResponseDto })
+  @ApiForbiddenResponse({ type: ApiErrorResponseDto })
+  @ApiNotFoundResponse({ type: ApiErrorResponseDto })
+  @ApiConflictResponse({ type: ApiErrorResponseDto })
+  confirmSalesOrder(
+    @CurrentUser() currentUser: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ConfirmSalesOrderDto,
+  ): Promise<ConfirmSalesOrderResponseDto> {
+    return this.salesOrdersService.confirmSalesOrder(currentUser, id, dto);
   }
 }

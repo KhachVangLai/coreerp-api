@@ -47,6 +47,12 @@ export class SalesOrderReservationSummaryDto {
   id!: string;
 
   @ApiProperty({ example: '7dfc5a25-5f0f-46f4-a7cb-8f3e8dc7f9cc' })
+  salesOrderLineId!: string;
+
+  @ApiProperty({ example: '7dfc5a25-5f0f-46f4-a7cb-8f3e8dc7f9cc' })
+  warehouseId!: string;
+
+  @ApiProperty({ example: '7dfc5a25-5f0f-46f4-a7cb-8f3e8dc7f9cc' })
   productId!: string;
 
   @ApiProperty({ example: 5 })
@@ -100,6 +106,9 @@ export class SalesOrderResponseDto {
 
   @ApiProperty({ enum: SalesOrderStatus, example: SalesOrderStatus.DRAFT })
   status!: SalesOrderStatus;
+
+  @ApiPropertyOptional({ example: '2026-05-20T12:00:00.000Z', nullable: true })
+  confirmedAt?: Date | null;
 
   @ApiProperty({ example: '600000.00' })
   subtotalAmount!: string;
@@ -158,4 +167,21 @@ export class PaginatedSalesOrderResponseDto {
 
   @ApiProperty({ type: SalesOrdersPaginationMetaDto })
   meta!: SalesOrdersPaginationMetaDto;
+}
+
+export class ConfirmSalesOrderResponseDto {
+  @ApiProperty({ example: '7dfc5a25-5f0f-46f4-a7cb-8f3e8dc7f9cc' })
+  id!: string;
+
+  @ApiProperty({ example: 'SO-20260520-0001' })
+  orderCode!: string;
+
+  @ApiProperty({ enum: SalesOrderStatus, example: SalesOrderStatus.CONFIRMED })
+  status!: SalesOrderStatus;
+
+  @ApiProperty({ example: '2026-05-20T12:00:00.000Z' })
+  confirmedAt!: Date | null;
+
+  @ApiProperty({ type: [SalesOrderReservationSummaryDto] })
+  reservations!: SalesOrderReservationSummaryDto[];
 }

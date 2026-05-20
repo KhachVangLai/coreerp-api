@@ -1,5 +1,11 @@
 import { HttpStatus } from '@nestjs/common';
-import { RecordStatus, SalesOrderStatus, UserRole } from '@prisma/client';
+import {
+  RecordStatus,
+  SalesOrderStatus,
+  StockMovementType,
+  StockReservationStatus,
+  UserRole,
+} from '@prisma/client';
 
 import { AuthenticatedUser } from '../auth/types/auth-user.type';
 import { ErrorCode } from '../common/errors/error-code.enum';
@@ -9,8 +15,15 @@ import { SalesOrdersService } from './sales-orders.service';
 
 type MockPrisma = {
   $transaction: jest.Mock;
+  $queryRaw: jest.Mock;
   customer: {
     findFirst: jest.Mock;
+  };
+  invoice: {
+    create: jest.Mock;
+  };
+  payment: {
+    create: jest.Mock;
   };
   product: {
     findMany: jest.Mock;
@@ -20,6 +33,7 @@ type MockPrisma = {
     create: jest.Mock;
     findFirst: jest.Mock;
     findMany: jest.Mock;
+    update: jest.Mock;
   };
   stockItem: {
     update: jest.Mock;
@@ -90,6 +104,7 @@ describe('SalesOrdersService', () => {
     customerId: customer.id,
     warehouseId: warehouse.id,
     status: SalesOrderStatus.DRAFT,
+    confirmedAt: null,
     subtotalAmount: decimal('600000.00'),
     discountAmount: decimal('0.00'),
     taxAmount: decimal('0.00'),
@@ -124,8 +139,15 @@ describe('SalesOrdersService', () => {
 
         return (input as (tx: MockPrisma) => Promise<unknown>)(prisma);
       }),
+      $queryRaw: jest.fn(),
       customer: {
         findFirst: jest.fn(),
+      },
+      invoice: {
+        create: jest.fn(),
+      },
+      payment: {
+        create: jest.fn(),
       },
       product: {
         findMany: jest.fn(),
@@ -135,6 +157,7 @@ describe('SalesOrdersService', () => {
         create: jest.fn(),
         findFirst: jest.fn(),
         findMany: jest.fn(),
+        update: jest.fn(),
       },
       stockItem: {
         update: jest.fn(),
@@ -370,5 +393,279 @@ describe('SalesOrdersService', () => {
       response: { code: ErrorCode.NOT_FOUND, message: 'Sales order not found' },
       status: HttpStatus.NOT_FOUND,
     });
+  });
+
+  it('confirms a DRAFT order and reserves stock transactionally', async () => {
+    const confirmedAt = new Date('2026-05-20T13:00:00.000Z');
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      warehouseId: warehouse.id,
+      status: SalesOrderStatus.DRAFT,
+      lines: [
+        {
+          id: 'sales-order-line-1',
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'stock-item-1',
+        quantityOnHand: 10,
+        quantityReserved: 0,
+      },
+    ]);
+    prisma.stockItem.update.mockResolvedValue({ id: 'stock-item-1' });
+    prisma.stockReservation.create.mockResolvedValue({ id: 'reservation-1' });
+    prisma.stockMovement.create.mockResolvedValue({ id: 'movement-1' });
+    prisma.salesOrder.update.mockResolvedValue({
+      id: createdOrder.id,
+      orderCode: createdOrder.orderCode,
+      status: SalesOrderStatus.CONFIRMED,
+      confirmedAt,
+      reservations: [
+        {
+          id: 'reservation-1',
+          salesOrderLineId: 'sales-order-line-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+          status: StockReservationStatus.RESERVED,
+        },
+      ],
+    });
+
+    const result = await service.confirmSalesOrder(admin, createdOrder.id, {
+      note: 'Confirmed by sales',
+    });
+
+    expect(prisma.salesOrder.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: createdOrder.id,
+        tenantId: admin.tenantId,
+      },
+      select: expect.objectContaining({
+        id: true,
+        warehouseId: true,
+        status: true,
+      }),
+    });
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(prisma.stockItem.update).toHaveBeenCalledWith({
+      where: { id: 'stock-item-1' },
+      data: {
+        quantityReserved: 5,
+        version: { increment: 1 },
+      },
+      select: { id: true },
+    });
+    expect(prisma.stockReservation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tenantId: admin.tenantId,
+          salesOrderId: createdOrder.id,
+          salesOrderLineId: 'sales-order-line-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+          status: StockReservationStatus.RESERVED,
+        }),
+      }),
+    );
+    expect(prisma.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: StockMovementType.RESERVE,
+          quantity: 5,
+          beforeOnHand: 10,
+          afterOnHand: 10,
+          beforeReserved: 0,
+          afterReserved: 5,
+          referenceType: 'SALES_ORDER',
+          referenceId: createdOrder.id,
+          createdById: admin.userId,
+        }),
+      }),
+    );
+    expect(prisma.salesOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: SalesOrderStatus.CONFIRMED,
+          confirmedById: admin.userId,
+          confirmedAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(prisma.invoice.create).not.toHaveBeenCalled();
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      id: createdOrder.id,
+      orderCode: createdOrder.orderCode,
+      status: SalesOrderStatus.CONFIRMED,
+      confirmedAt,
+      reservations: [
+        {
+          id: 'reservation-1',
+          salesOrderLineId: 'sales-order-line-1',
+          warehouseId: warehouse.id,
+          productId: product.id,
+          quantity: 5,
+          status: StockReservationStatus.RESERVED,
+        },
+      ],
+    });
+  });
+
+  it('allows SALES to confirm a DRAFT order when caller context is valid', async () => {
+    const salesUser: AuthenticatedUser = {
+      ...admin,
+      userId: 'sales-1',
+      role: UserRole.SALES,
+    };
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      warehouseId: warehouse.id,
+      status: SalesOrderStatus.DRAFT,
+      lines: [
+        {
+          id: 'sales-order-line-1',
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'stock-item-1',
+        quantityOnHand: 10,
+        quantityReserved: 0,
+      },
+    ]);
+    prisma.stockItem.update.mockResolvedValue({ id: 'stock-item-1' });
+    prisma.stockReservation.create.mockResolvedValue({ id: 'reservation-1' });
+    prisma.stockMovement.create.mockResolvedValue({ id: 'movement-1' });
+    prisma.salesOrder.update.mockResolvedValue({
+      id: createdOrder.id,
+      orderCode: createdOrder.orderCode,
+      status: SalesOrderStatus.CONFIRMED,
+      confirmedAt: new Date('2026-05-20T13:00:00.000Z'),
+      reservations: [],
+    });
+
+    await service.confirmSalesOrder(salesUser, createdOrder.id, {});
+
+    expect(prisma.salesOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ confirmedById: salesUser.userId }),
+      }),
+    );
+  });
+
+  it('fails with INSUFFICIENT_STOCK and does not reserve partial stock', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      warehouseId: warehouse.id,
+      status: SalesOrderStatus.DRAFT,
+      lines: [
+        {
+          id: 'sales-order-line-1',
+          productId: product.id,
+          quantity: 7,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'stock-item-1',
+        quantityOnHand: 10,
+        quantityReserved: 4,
+      },
+    ]);
+
+    await expect(
+      service.confirmSalesOrder(admin, createdOrder.id, {}),
+    ).rejects.toMatchObject({
+      response: {
+        code: ErrorCode.INSUFFICIENT_STOCK,
+        message: 'Available stock is not enough',
+        details: {
+          productId: product.id,
+          requestedQuantity: 7,
+          availableQuantity: 6,
+        },
+      },
+      status: HttpStatus.CONFLICT,
+    });
+    expect(prisma.stockItem.update).not.toHaveBeenCalled();
+    expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+    expect(prisma.salesOrder.update).not.toHaveBeenCalled();
+  });
+
+  it('returns INVALID_ORDER_STATUS for non-DRAFT orders', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      warehouseId: warehouse.id,
+      status: SalesOrderStatus.CONFIRMED,
+      lines: [
+        {
+          id: 'sales-order-line-1',
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+
+    await expect(
+      service.confirmSalesOrder(admin, createdOrder.id, {}),
+    ).rejects.toMatchObject({
+      response: {
+        code: ErrorCode.INVALID_ORDER_STATUS,
+        message: 'Only DRAFT sales orders can be confirmed',
+      },
+      status: HttpStatus.CONFLICT,
+    });
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('returns NOT_FOUND for cross-tenant orders', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.confirmSalesOrder(admin, 'tenant-b-sales-order', {}),
+    ).rejects.toMatchObject({
+      response: { code: ErrorCode.NOT_FOUND, message: 'Sales order not found' },
+      status: HttpStatus.NOT_FOUND,
+    });
+  });
+
+  it('returns NOT_FOUND when tenant-scoped stock item is missing', async () => {
+    prisma.salesOrder.findFirst.mockResolvedValue({
+      id: createdOrder.id,
+      warehouseId: warehouse.id,
+      status: SalesOrderStatus.DRAFT,
+      lines: [
+        {
+          id: 'sales-order-line-1',
+          productId: product.id,
+          quantity: 5,
+        },
+      ],
+    });
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    await expect(
+      service.confirmSalesOrder(admin, createdOrder.id, {}),
+    ).rejects.toMatchObject({
+      response: {
+        code: ErrorCode.NOT_FOUND,
+        message: 'Stock item not found',
+      },
+      status: HttpStatus.NOT_FOUND,
+    });
+    expect(prisma.stockItem.update).not.toHaveBeenCalled();
+    expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
   });
 });
