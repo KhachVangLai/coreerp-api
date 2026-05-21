@@ -1,6 +1,36 @@
 # CoreERP API
 
-SaaS-ready multi-tenant ERP backend for Vietnamese SMBs.
+SaaS-ready multi-tenant ERP backend for Vietnamese SMBs, built with NestJS, PostgreSQL, Prisma, JWT/RBAC, Swagger, and Jest.
+
+The MVP implements the Order-to-Cash workflow:
+
+```text
+Sales Order -> Stock Reservation -> Warehouse Fulfillment -> Invoice Snapshot -> Payment -> Order Completion
+```
+
+## Table Of Contents
+
+- [Highlights](#highlights)
+- [Tech Stack](#tech-stack)
+- [MVP Modules](#mvp-modules)
+- [Quick Start](#quick-start)
+- [Demo Accounts](#demo-accounts)
+- [API Docs](#api-docs)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Known Limits](#known-limits)
+- [CV Bullets](#cv-bullets)
+
+## Highlights
+
+- Modular monolith backend for a realistic ERP MVP.
+- Tenant-scoped data isolation for users, master data, inventory, orders, invoices, payments, and audit logs.
+- JWT authentication with RBAC guards.
+- Transactional stock reservation with PostgreSQL row-level locking to prevent overselling.
+- Invoice line snapshots so historical financial documents remain stable.
+- Partial/full payment workflow that completes fulfilled sales orders.
+- Audit logs for key business actions.
+- Swagger-documented REST APIs and E2E tests for the full business flow.
 
 ## Tech Stack
 
@@ -9,100 +39,66 @@ SaaS-ready multi-tenant ERP backend for Vietnamese SMBs.
 - PostgreSQL
 - Prisma
 - Docker Compose
+- JWT + Passport
+- RBAC
 - Swagger/OpenAPI
-- Jest
+- Jest + Supertest
+- bcrypt
 
-## Architecture
+## MVP Modules
 
-CoreERP is built as a modular monolith. The current MVP covers the Order-to-Cash workflow from master data and inventory through sales order fulfillment, invoicing, payment, and audit logs.
+- Auth and current user
+- RBAC helpers
+- Tenant users
+- Customers
+- Products
+- Warehouses
+- Inventory
+- Sales orders
+- Invoices
+- Payments
+- Audit logs
+- Health check
 
-## Local Development
+## Quick Start
 
-1. Install dependencies:
-
-   ```bash
-   npm install
-   ```
-
-2. Create a local environment file:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-3. Start the development server:
-
-   ```bash
-   npm run start:dev
-   ```
-
-   On Windows PowerShell, if script execution policy blocks `npm`, use:
-
-   ```powershell
-   npm.cmd run start:dev
-   ```
-
-4. Open Swagger UI:
-
-   ```text
-   http://localhost:3000/api/docs
-   ```
-
-5. Check service health:
-
-   ```text
-   GET http://localhost:3000/api/v1/health
-   ```
-
-## Database Setup
-
-Start PostgreSQL with Docker Compose:
+Install dependencies:
 
 ```bash
-docker compose up -d
+npm install
 ```
 
-Create a local environment file:
+Create `.env`:
 
 ```bash
 cp .env.example .env
 ```
 
-Validate the Prisma schema:
+Start PostgreSQL:
 
 ```bash
-npm run prisma:validate
+docker compose up -d
 ```
 
-Run database migrations:
+Run Prisma migration, generate client, and seed demo accounts:
 
 ```bash
 npm run prisma:migrate
-```
-
-For future schema changes, pass a migration name, for example `npm run prisma:migrate -- --name add_next_feature`.
-
-Generate Prisma Client:
-
-```bash
 npm run prisma:generate
-```
-
-Open Prisma Studio:
-
-```bash
-npm run prisma:studio
-```
-
-Seed local demo tenants and users:
-
-```bash
 npm run db:seed
 ```
 
+Start the API:
+
+```bash
+npm run start:dev
+```
+
+On Windows PowerShell, use `npm.cmd` if `npm` is blocked by script execution policy.
+
 ## Demo Accounts
 
-All demo accounts use password `123456`. These accounts are for local development only.
+All demo accounts use password `123456`.
 
 | tenantCode | email | role |
 |---|---|---|
@@ -117,51 +113,59 @@ All demo accounts use password `123456`. These accounts are for local developmen
 | hoang-long-fashion | finance@hoanglong.vn | FINANCE |
 | hoang-long-fashion | viewer@hoanglong.vn | VIEWER |
 
-Login with `POST /api/v1/auth/login`, then call `GET /api/v1/me` with `Authorization: Bearer <accessToken>`.
+## API Docs
 
-## Available Scripts
+Swagger UI:
 
-- `npm run start:dev` - start NestJS in watch mode
-- `npm run build` - compile the application
-- `npm run lint` - run ESLint with fixes
-- `npm test` - run Jest tests
-- `npm run prisma:validate` - validate `prisma/schema.prisma`
-- `npm run prisma:migrate` - create/apply a local Prisma migration
-- `npm run prisma:generate` - generate Prisma Client
-- `npm run prisma:studio` - open Prisma Studio
-- `npm run db:seed` - seed local demo tenants and users
-
-## Tests
-
-Run the full test suite:
-
-```bash
-npm test -- --runInBand
+```text
+http://localhost:3000/api/docs
 ```
 
-The test suite includes E2E coverage for the MVP Order-to-Cash flow: master data setup, stock receipt, sales order confirmation/reservation, warehouse fulfillment, invoice issue, partial/full payment, audit logs, RBAC restrictions, tenant isolation, snapshot behavior, overselling prevention, cancellation/release, and payment stock-safety rules.
+Health check:
 
-## Current Scope
+```text
+GET http://localhost:3000/api/v1/health
+```
 
-This repository currently contains the CoreERP MVP backend foundation and Order-to-Cash workflow:
+## Testing
 
-- Global configuration module
-- Global validation pipe
-- Standard API response envelope
-- Global exception filter
-- Swagger/OpenAPI at `/api/docs`
-- Health endpoint at `/api/v1/health`
-- PostgreSQL Docker Compose setup
-- Prisma schema, migration, client generation, and local demo seed
-- Auth login/current user, RBAC guards, and tenant context helpers
-- Tenant-scoped users, customers, products, warehouses, inventory, sales orders, invoices, payments, and audit logs
+Recommended verification:
 
-Reports, Redis, Kafka, Outbox, refunds, and frontend workflows are intentionally not implemented yet.
+```bash
+npm run build
+npm run lint
+npm test -- --runInBand
+npm run prisma:validate
+```
 
-## Project Documentation
+E2E tests cover:
 
-- [Requirement & Planning v3](docs/CoreERP_MVP_Requirement_Planning_v3_Notion.md)
-- [API Contract v1](docs/CoreERP_API_Contract_v1.md)
-- [Codex Implementation Backlog v1](docs/CoreERP_Codex_Implementation_Backlog_v1.md)
-- [Prisma Schema v1](docs/CoreERP_Prismeschema_v1.prisma)
-- [Prisma Schema Notes v1](docs/CoreERP_Prismeschema_v1_notes.md)
+- Full Order-to-Cash flow.
+- Tenant isolation.
+- RBAC restrictions.
+- Overselling prevention.
+- Cancel/release reservation.
+- Invoice snapshots.
+- Payment rules.
+- Audit logs.
+
+## Documentation
+
+- [CoreERP Documentation](docs/coreerp-documentation.md)
+- [Demo Guide](docs/demo-guide.md)
+
+## Known Limits
+
+- No frontend yet; Swagger is used for API demo.
+- Demo tenants are seeded; no public tenant signup yet.
+- One user belongs to one tenant in the MVP.
+- One order uses one warehouse in the MVP.
+- No reports, Redis, Kafka, Outbox, refunds, returns, deployment guide, or CI/CD yet.
+- DB-level composite tenant-scoped FK hardening is deferred; service-level tenant checks and E2E tests are implemented.
+
+## CV Bullets
+
+- Built a multi-tenant ERP backend with JWT/RBAC, tenant-scoped isolation, and Swagger-documented REST APIs.
+- Implemented transactional stock reservation with PostgreSQL row-level locking to prevent overselling.
+- Designed invoice snapshot and payment workflow with partial/full payment and order completion.
+- Added audit logging and E2E tests covering Order-to-Cash, RBAC, tenant isolation, and inventory/payment edge cases.
