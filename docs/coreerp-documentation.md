@@ -1,6 +1,6 @@
 # CoreERP Documentation
 
-CoreERP API is a SaaS-ready multi-tenant ERP backend for Vietnamese SMBs.
+CoreERP API is a SaaS-ready multi-tenant ERP backend for Vietnamese SMBs and an internal ERP admin / back-office system.
 
 The MVP focuses on the Order-to-Cash workflow:
 
@@ -20,6 +20,8 @@ Sales Order -> Stock Reservation -> Warehouse Fulfillment -> Invoice Snapshot ->
 - [Multi-Tenant Design](#multi-tenant-design)
 - [Inventory Transaction Design](#inventory-transaction-design)
 - [Invoice Snapshot Design](#invoice-snapshot-design)
+- [Payment Positioning](#payment-positioning)
+- [Redis/Valkey Positioning](#redisvalkey-positioning)
 - [API Conventions](#api-conventions)
 - [Endpoint Summary](#endpoint-summary)
 - [Local Development](#local-development)
@@ -27,6 +29,7 @@ Sales Order -> Stock Reservation -> Warehouse Fulfillment -> Invoice Snapshot ->
 - [Testing](#testing)
 - [Known Limitations](#known-limitations)
 - [Future Improvements](#future-improvements)
+- [Technical Debt](#technical-debt)
 - [CV Bullets](#cv-bullets)
 - [Interview Talking Points](#interview-talking-points)
 
@@ -34,7 +37,7 @@ Sales Order -> Stock Reservation -> Warehouse Fulfillment -> Invoice Snapshot ->
 
 Small and medium businesses often need ERP-style workflows before they are ready for a large enterprise system. CoreERP demonstrates how to design a practical backend for tenant-scoped operations, inventory correctness, invoice snapshots, payments, audit logs, and clear REST API contracts.
 
-The project is intentionally implemented as a modular monolith, which keeps the deployment model simple while still separating business capabilities cleanly.
+The project is intentionally implemented as a modular monolith, which keeps the deployment model simple while still separating business capabilities cleanly. It is not an e-commerce checkout, legal e-invoice platform, payment gateway platform, microservices system, or 3PL warehouse platform.
 
 ## MVP Scope
 
@@ -55,14 +58,15 @@ Implemented:
 - Swagger/OpenAPI documentation.
 - Unit and E2E test coverage.
 
-Not included:
+Not included in the backend MVP:
 
-- Frontend.
 - Public tenant signup.
 - Reports.
-- Redis/Kafka/Outbox.
+- Redis, Valkey, Kafka, Redpanda, or Outbox.
+- Online payment gateway, payment links, provider webhook handling, refunds, or payment reconciliation.
+- Printable invoice view, invoice PDF export, legal e-invoice integration, digital signature, or invoice email sending.
 - Refunds/returns.
-- Deployment automation.
+- Deployment automation or CI/CD.
 
 ## Tech Stack
 
@@ -210,6 +214,23 @@ stateDiagram-v2
 - Product changes after order or invoice creation do not rewrite historical document lines.
 - Invoice creation does not update stock, reservations, or stock movements.
 - Payment updates invoice paid status and may complete the sales order, but does not update stock.
+- The MVP invoice module stores invoice data, issue workflow state, line snapshots, and payment tracking.
+- The MVP does not generate invoice PDFs, printable invoice views, legal e-invoices, digital signatures, or invoice emails.
+
+## Payment Positioning
+
+- Payments are manual finance-user payment records against issued invoices.
+- The workflow supports partial payment, full payment, overpayment prevention, invoice status updates, and sales order completion when the order is fulfilled and fully paid.
+- The MVP does not implement online payment gateways, payment links, payment provider webhooks, refunds, or payment reconciliation.
+- A payment gateway adapter should only be considered later if a customer-facing payment link or portal flow is added.
+
+## Redis/Valkey Positioning
+
+- Redis/Valkey is intentionally not used in the MVP.
+- PostgreSQL is the source of truth for orders, inventory, invoices, payments, and audit logs.
+- Inventory correctness uses PostgreSQL transactions and row-level locking.
+- Redis/Valkey may only be considered later for non-critical caching or rate limiting if a measured need appears.
+- Redis/Valkey must not be used for inventory correctness, payment state, order state, invoice state, or audit logs.
 
 ## API Conventions
 
@@ -318,10 +339,19 @@ Environment variables in `.env.example`:
 - `DATABASE_URL`
 - `JWT_ACCESS_SECRET`
 - `JWT_ACCESS_EXPIRES_IN`
+- `FRONTEND_ORIGIN`
 - `POSTGRES_DB`
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
 - `POSTGRES_PORT`
+
+For local React admin development, set:
+
+```text
+FRONTEND_ORIGIN=http://localhost:5173,http://127.0.0.1:5173
+```
+
+The backend allows these origins for CORS with common REST methods and `Content-Type` / `Authorization` headers. Credentials are not enabled because the API uses Bearer tokens, not cookies.
 
 ## Demo Accounts
 
@@ -371,28 +401,39 @@ E2E coverage includes:
 
 ## Known Limitations
 
-- No frontend yet; Swagger is used for API demo.
+- The separate React admin frontend lives in `coreerp-admin`; Swagger remains the API reference.
 - No public tenant signup yet; demo tenants are seeded.
 - One user belongs to one tenant in the MVP.
 - Warehouse is a tenant-scoped logical warehouse in the MVP.
 - One sales order uses one warehouse in the MVP.
 - No Redis, Kafka, Redpanda, or Outbox in the MVP.
 - No reports module in the MVP.
-- No refunds, returns, or payment cancellation.
+- No online payment gateway, payment links, provider webhooks, refunds, reconciliation, returns, or payment cancellation.
+- No printable invoice view, invoice PDF export, legal e-invoice integration, digital signature, or invoice email sending.
+- No production deployment or CI/CD yet.
 - DB-level composite tenant-scoped foreign key hardening is deferred; service-level tenant ownership checks and tests are implemented.
 - Prisma seed configuration currently lives in `package.json#prisma`; Prisma warns this will change in Prisma 7.
 
 ## Future Improvements
 
-- React Admin frontend.
-- Platform tenant onboarding and public tenant signup.
-- Redis cache, rate limiting, and idempotency keys.
-- Outbox pattern with Kafka or Redpanda.
-- Reports and read models for finance, sales, and inventory.
+- Printable invoice view / PDF export.
+- GitHub Actions CI for lint, build, and test.
+- Frontend E2E tests with Playwright.
+- Reports/read models for revenue, unpaid invoices, and low stock.
 - Composite tenant-scoped foreign key hardening.
-- CI/CD with GitHub Actions.
-- Deployment guide and production environment examples.
-- Refunds, returns, and payment cancellation workflows.
+- Platform tenant onboarding.
+- Deployment guide.
+- Optional payment gateway adapter and webhook simulation only if a customer-facing payment flow is added.
+- Optional e-invoice provider abstraction only if legal invoice integration is needed.
+- Optional Outbox pattern with Kafka/Redpanda only if async integration or service split becomes necessary.
+- Optional Redis/Valkey only for non-critical caching or rate limiting after measured need.
+
+## Technical Debt
+
+- DB-level composite tenant-scoped FK hardening is deferred.
+- Prisma seed configuration currently lives in `package.json#prisma`; Prisma warns this will change in Prisma 7.
+- CI/CD is not implemented yet.
+- Deployment is not implemented yet.
 
 ## CV Bullets
 
@@ -410,4 +451,4 @@ E2E coverage includes:
 - Why invoice lines must snapshot sales order line data.
 - How partial payment, full payment, invoice status, and sales order completion interact.
 - Where audit logging belongs in transaction boundaries.
-- Which tradeoffs are intentionally deferred: Outbox, reports, composite tenant-scoped FKs, frontend, and deployment.
+- Which tradeoffs are intentionally deferred: reports, composite tenant-scoped FKs, deployment, and optional infrastructure such as Redis/Valkey or Outbox/Kafka only after a measured need.
